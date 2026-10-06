@@ -82,6 +82,56 @@ class LocksTest(unittest.TestCase):
             names = {r[0] for r in log._db.execute("SELECT name FROM sqlite_master WHERE type='trigger'")}
         self.assertEqual(names, set())
 
+    def test_the_table_and_its_triggers_are_created_in_one_transaction(self):
+        # watch the create script itself: the statements the new log's own connection ran
+        traced = []
+        new = os.path.join(self.tmp.name, "new2.db")
+        original = sqlite3.connect
+        def connect(*a, **kw):
+            c = original(*a, **kw)
+            c.set_trace_callback(traced.append)
+            return c
+        sqlite3.connect = connect
+        try:
+            AuditLog(new).close()
+        finally:
+            sqlite3.connect = original
+        creates = [s for s in traced if s.upper().startswith(("BEGIN", "COMMIT", "CREATE"))]
+        self.assertEqual([s.split()[0].upper().rstrip(";") for s in creates],
+                         ["BEGIN", "CREATE", "CREATE", "CREATE", "COMMIT"])
+        self.assertIn("IMMEDIATE", creates[0].upper())
+
+    def test_a_half_made_empty_log_gets_its_triggers_on_open(self):
+        """The state a kill part-way through creation could leave: the table is there, the triggers are not,
+        and nothing has been written. Opening it finishes the job."""
+        path = os.path.join(self.tmp.name, "half.db")
+        c = sqlite3.connect(path)
+        c.execute("CREATE TABLE audit(seq INTEGER PRIMARY KEY, chain_id TEXT NOT NULL, ts INTEGER NOT NULL,"
+                  " event_type TEXT NOT NULL, principal TEXT NOT NULL, action TEXT NOT NULL, payload TEXT NOT NULL,"
+                  " payload_hash TEXT NOT NULL, prev_hash TEXT NOT NULL, event_hash TEXT NOT NULL UNIQUE,"
+                  " schema_version INTEGER NOT NULL)")
+        c.commit()
+        c.close()
+        with AuditLog(path) as log:
+            names = {r[0] for r in log._db.execute("SELECT name FROM sqlite_master WHERE type='trigger'")}
+            self.assertEqual(names, {"audit_no_update", "audit_no_delete"})
+            log.append("EVENT", "alice", "demo", {})
+            with self.assertRaises(sqlite3.DatabaseError):
+                log._db.execute("DELETE FROM audit")
+
+    def test_a_log_with_rows_and_no_triggers_is_left_as_it_is(self):
+        """The state an attacker leaves: rows present, triggers removed. Opening it changes nothing;
+        verify() with a head kept elsewhere is the guarantee, not the triggers."""
+        c = sqlite3.connect(self.path)
+        c.execute("DROP TRIGGER audit_no_update")
+        c.execute("DROP TRIGGER audit_no_delete")
+        c.commit()
+        c.close()
+        with AuditLog(self.path) as log:
+            names = {r[0] for r in log._db.execute("SELECT name FROM sqlite_master WHERE type='trigger'")}
+            self.assertEqual(names, set())
+            self.assertTrue(log.verify(expected_head=self.head)["ok"])
+
     def test_a_second_process_can_verify_while_the_first_holds_a_write_transaction(self):
         flag, release = os.path.join(self.tmp.name, "holding"), os.path.join(self.tmp.name, "release")
         child = subprocess.Popen([sys.executable, "-c", HOLDER, self.path, flag, release], cwd=ROOT)

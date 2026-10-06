@@ -122,6 +122,25 @@ class EngineTest(unittest.TestCase):
         now[0] += 61
         self.assertEqual(eng.confirm("alice", tok)["error"], "expired")
 
+    def test_close_closes_both_stores(self):
+        import os
+        import sqlite3
+        import tempfile
+        from oathline import AuditLog
+        with tempfile.TemporaryDirectory() as folder:
+            reg = Registry([Capability("notes.read", frozenset({"agent"}))])
+            eng = Engine(reg, audit=AuditLog(os.path.join(folder, "audit.db")),
+                         tokens=TokenStore(os.path.join(folder, "tokens.db")))
+            eng.register("notes.read", lambda a: {"notes": 1})
+            self.assertTrue(eng.request("agent", "notes.read")["ok"])
+            eng.close()
+            with self.assertRaises(sqlite3.ProgrammingError):
+                eng.audit.events()
+            with self.assertRaises(sqlite3.ProgrammingError):
+                eng.tokens.get("tok_" + "0" * 32)
+            for name in ("audit.db", "tokens.db"):
+                os.remove(os.path.join(folder, name))           # on Windows this needs both connections closed
+
     def test_is_non_human(self):
         for p in ("model", "Agent", "llm@host", "", "  "):
             self.assertTrue(is_non_human(p))

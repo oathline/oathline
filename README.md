@@ -40,13 +40,13 @@ What it does not protect against is listed in full [further down](#what-oathline
 
 Standard library only. Python 3.10+.
 
-The whole `oathline/` package is 1351 lines of Python in 6 files. Count them yourself from the repository root:
+The whole `oathline/` package is 1362 lines of Python in 6 files. Count them yourself from the repository root:
 
 ```bash
 python -c "import glob; print(sum(1 for f in glob.glob('oathline/*.py') for _ in open(f, encoding='utf-8')))"
 ```
 
-The repository has 235 tests. `python -m unittest discover -s tests` runs them and prints the count.
+The repository has 239 tests. `python -m unittest discover -s tests` runs them and prints the count.
 
 An earlier version of Oathline Core recorded 233 events in its hash-chained audit log during one internal job for our own company (30 Sep to 2 Oct 2026).
 The job's audit logs are private, so this can't be checked from this repository.
@@ -215,7 +215,7 @@ python -m unittest discover -s tests
 ```
 
 The example shows a read running, a write waiting for a human, and the audit log proving it.
-The 235 tests need no network.
+The 239 tests need no network.
 
 The same flow in your own code. This block runs as written; the stand-ins at the top
 (`user_text`, `model_output`, `send_email`, `show_to_a_human`) are where your app plugs in:
@@ -505,9 +505,11 @@ see [SECURITY.md](SECURITY.md).
   log. `verify()` on its own then passes. It catches the rest: a changed field, a deleted event that is not
   at the end, two swapped events, an event with a wrong hash.
   Keep `audit.head()` outside the machine and pass it to `verify(expected_head=...)`.
-- Opening an existing log or token store writes nothing and takes no lock, so one process can read and
-  verify a log while another is writing to it. The table and its triggers are created together, only when
-  the file is new. If someone removed the triggers, opening the log does not put them back.
+- Opening an existing log or token store writes nothing and takes no write lock, so one process can read
+  and verify a log while another is writing to it. The table and its triggers are created in one
+  transaction, when the table is missing. One exception: a log whose table has no rows and no triggers (a
+  creation that was cut short) gets its triggers on open. A log with rows is left exactly as found: if
+  someone removed the triggers, opening it does not put them back, and `verify()` does not report it.
 - The triggers that refuse UPDATE and DELETE stop accidents. Someone with the file or the connection can
   remove them, or use `INSERT OR REPLACE`; those edits are left to `verify()`.
 - Someone who can write to the token store can change a pending proposal together with its hash (the hash

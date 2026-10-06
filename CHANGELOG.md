@@ -56,8 +56,10 @@ the lines of code for each one.
   was in the middle of a transaction. In the test suite this showed up as five intermittent errors. And when
   that open failed, the half-opened connection was never closed. Now opening an existing store writes nothing
   and takes no lock: the table and its triggers are created together, only when the file is new; a failed
-  open closes its connection. `tests/test_locks.py` holds the proof, including a second process verifying
-  the log while the first holds a write transaction. The test suite's own fault that exposed it (a forged
+  open closes its connection. The table and its triggers are created in one transaction; a log left with an
+  empty table and no triggers by a cut-short creation gets its triggers on open, and a log with rows is left
+  as found. `tests/test_locks.py` holds the proof, including a second process verifying the log while the
+  first holds a write transaction. The test suite's own fault that exposed it (a forged
   hash that collided one time in sixteen, leaving a test connection open with a failed transaction) is fixed
   in `tests/test_tamper_sweep.py`.
 
