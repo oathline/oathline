@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.1.1
+
+Documentation and packaging only. No change to the package's behaviour; the 0.1.0 guarantees below stand unchanged.
+
+- README: the four links to repository files (`CONSTITUTION.md`, `ATTACKS.md`, `SECURITY.md`, `LICENSE`) are now
+  absolute, so they work on the PyPI project page as well as on GitHub. On PyPI they were broken.
+- README: a short block at the top: what Oathline is in three lines, the install line, and a ten-line example.
+  `tests/test_readme_top.py` runs that block exactly as printed and checks its output, and checks that the README
+  holds no relative links.
+- Version 0.1.1 in `pyproject.toml`, `oathline/__init__.py` and this file.
+
 ## 0.1.0
 
 The first public version. Standard library only, Python 3.10 or newer. Install with `python -m pip install oathline`.

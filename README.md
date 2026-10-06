@@ -1,5 +1,36 @@
 # Oathline
 
+**In three lines.** Oathline is a small governance core for AI agents that take real actions.
+The model interprets; deterministic code decides: only allowlisted capabilities run, model output is validated and not trusted, and a write waits for a human's confirmation token that works once.
+Requests, decisions and refusals are written to an append-only, hash-chained audit log. Standard library only, Python 3.10 or newer.
+
+**Install:** `python -m pip install oathline`
+
+**Ten lines that show it** (the test `tests/test_readme_top.py` runs this block exactly as printed):
+
+```python
+from oathline import Capability, Engine, Registry
+registry = Registry([Capability("calendar.read", frozenset({"agent"})),
+                     Capability("email.send", frozenset({"agent", "alice"}), writes=True, needs_confirmation=True)])
+engine = Engine(registry)
+engine.register("calendar.read", lambda a: {"events": ["09:00 stand-up"]})
+engine.register("email.send", lambda a: {"sent_to": a["to"]})
+print("read:", engine.request("agent", "calendar.read")["result"])              # a read runs at once
+proposal = engine.request("agent", "email.send", {"to": "bob@example.com"})      # a write waits for a human
+print("agent confirms:", engine.confirm("agent", proposal["token"])["ok"])        # False: an agent is not a human
+print("alice confirms:", engine.confirm("alice", proposal["token"])["state"], "| audit chain ok:", engine.audit.verify()["ok"])
+```
+
+Expected output:
+
+```
+read: {'events': ['09:00 stand-up']}
+agent confirms: False
+alice confirms: executed | audit chain ok: True
+```
+
+---
+
 A small governance core for AI agents that take real actions.
 
 **The model interprets. Deterministic code decides.** Oathline sits between a language model
@@ -46,7 +77,7 @@ The whole `oathline/` package is 1362 lines of Python in 6 files. Count them you
 python -c "import glob; print(sum(1 for f in glob.glob('oathline/*.py') for _ in open(f, encoding='utf-8')))"
 ```
 
-The repository has 239 tests. `python -m unittest discover -s tests` runs them and prints the count.
+The repository has 241 tests. `python -m unittest discover -s tests` runs them and prints the count.
 
 An earlier version of Oathline Core recorded 233 events in its hash-chained audit log during one internal job for our own company (30 Sep to 2 Oct 2026).
 The job's audit logs are private, so this can't be checked from this repository.
@@ -222,7 +253,7 @@ python -m unittest discover -s tests
 ```
 
 The example shows a read running, a write waiting for a human, and the audit log proving it.
-The 239 tests need no network.
+The 241 tests need no network.
 
 The same flow in your own code. This block runs as written; the stand-ins at the top
 (`user_text`, `model_output`, `send_email`, `show_to_a_human`) are where your app plugs in:
@@ -265,7 +296,7 @@ assert engine.audit.verify()["ok"]
 
 ## The four parts
 
-The principles behind them are in [CONSTITUTION.md](CONSTITUTION.md).
+The principles behind them are in [CONSTITUTION.md](https://github.com/oathline/oathline/blob/main/CONSTITUTION.md).
 
 | Part | Modules | What it does |
 |---|---|---|
@@ -457,13 +488,13 @@ cannot be written to the log, the result carries `warning: verification_not_reco
 
 ## Attacks that fail
 
-[ATTACKS.md](ATTACKS.md) is one table: each attack, the test that proves it fails, and the lines of code
-that stop it. If you find one that works, report it privately as [SECURITY.md](SECURITY.md) says.
+[ATTACKS.md](https://github.com/oathline/oathline/blob/main/ATTACKS.md) is one table: each attack, the test that proves it fails, and the lines of code
+that stop it. If you find one that works, report it privately as [SECURITY.md](https://github.com/oathline/oathline/blob/main/SECURITY.md) says.
 
 ## What Oathline does not protect against
 
 Every limit we know of, in plain words. If you find one that is not here, it is a bug in this list:
-see [SECURITY.md](SECURITY.md).
+see [SECURITY.md](https://github.com/oathline/oathline/blob/main/SECURITY.md).
 
 **Going around it**
 
@@ -624,4 +655,4 @@ None of this exists in the repository today.
 
 ## Licence
 
-MIT, Copyright (c) 2026 Nexxt Nest Group Pty Ltd (ABN 52 689 862 922). See [LICENSE](LICENSE).
+MIT, Copyright (c) 2026 Nexxt Nest Group Pty Ltd (ABN 52 689 862 922). See [LICENSE](https://github.com/oathline/oathline/blob/main/LICENSE).
