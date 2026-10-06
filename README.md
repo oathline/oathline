@@ -131,7 +131,8 @@ Limit: the same token used directly on a second copy of the store, not through O
 
 ## Install
 
-Oathline isn't on PyPI yet. Clone it and install it from the repository.
+Two ways. Installing from PyPI is enough to use the library; cloning gives you the examples and the
+tests as well.
 
 **Python version.** Check it first; you need 3.10 or newer (Oathline prints no warning if it's older):
 
@@ -155,7 +156,13 @@ Then activate it with the one line for your shell:
 | Windows, Git Bash | `source .venv/Scripts/activate` |
 | macOS or Linux | `source .venv/bin/activate` |
 
-**Clone and install:**
+**Install from PyPI:**
+
+```bash
+python -m pip install oathline
+```
+
+**Or clone and install:**
 
 ```bash
 git clone https://github.com/oathline/oathline.git
@@ -163,20 +170,20 @@ cd oathline
 python -m pip install .
 ```
 
-The install needs internet: pip downloads `setuptools>=68` to build the package, even though
-Oathline itself has no dependencies.
+Installing from the clone needs internet too: pip downloads `setuptools>=77` to build the package,
+even though Oathline itself has no dependencies.
 
-**Where to run things.** `python -m pip install .` is optional. Without it, the snippets in this
-README only work from the repository root (the `oathline` folder). With it, `import oathline` works
-from any folder. The files in `examples/` find the package themselves and run from anywhere.
+**Where to run things.** After either install, `import oathline` works from any folder. Without an
+install, the snippets in this README only work from the repository root (the `oathline` folder). The
+files in `examples/` find the package themselves and run from anywhere.
 
 **Where it has been checked.** By hand: Windows 11 with Python 3.11, 3.12 and 3.14. The CI workflow
 (`.github/workflows/tests.yml`) is set to run the tests on Ubuntu, Windows and macOS with Python 3.10, 3.11, 3.12 and 3.13.
 
 ## Quickstart (5 lines)
 
-Paste this into a Python file or prompt, run from the repository root (or anywhere after
-`python -m pip install .`):
+Paste this into a Python file or prompt, run from the repository root (or anywhere after an
+install):
 
 ```python
 from oathline import Capability, Engine, Registry

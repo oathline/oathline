@@ -2,7 +2,7 @@
 
 ## 0.1.0
 
-The first public version. Standard library only, Python 3.10 or newer.
+The first public version. Standard library only, Python 3.10 or newer. Install with `python -m pip install oathline`.
 
 ### What is guaranteed
 
