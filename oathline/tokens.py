@@ -120,14 +120,22 @@ class TokenStore:
         self.ttl = ttl_seconds
         self._clock = clock
         self._db = sqlite3.connect(path, timeout=10)
-        self._db.execute(
-            "CREATE TABLE IF NOT EXISTS proposals(id TEXT PRIMARY KEY, principal TEXT NOT NULL,"
-            " capability TEXT NOT NULL, arguments TEXT NOT NULL, state TEXT NOT NULL,"
-            " created REAL NOT NULL, expires REAL NOT NULL, integrity TEXT NOT NULL, confirmed_by TEXT)")
-        cols = {r[1] for r in self._db.execute("PRAGMA table_info(proposals)")}
-        if "confirmed_by" not in cols:                       # stores created before this column existed
-            self._db.execute("ALTER TABLE proposals ADD COLUMN confirmed_by TEXT")
-        self._db.commit()
+        try:
+            # Opening an existing store writes nothing, so it needs no lock and cannot wait on a writer.
+            exists = self._db.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='proposals'").fetchone()
+            if not exists:
+                self._db.execute(
+                    "CREATE TABLE IF NOT EXISTS proposals(id TEXT PRIMARY KEY, principal TEXT NOT NULL,"
+                    " capability TEXT NOT NULL, arguments TEXT NOT NULL, state TEXT NOT NULL,"
+                    " created REAL NOT NULL, expires REAL NOT NULL, integrity TEXT NOT NULL, confirmed_by TEXT)")
+                self._db.commit()
+            cols = {r[1] for r in self._db.execute("PRAGMA table_info(proposals)")}
+            if "confirmed_by" not in cols:                   # stores created before this column existed
+                self._db.execute("ALTER TABLE proposals ADD COLUMN confirmed_by TEXT")
+                self._db.commit()
+        except BaseException:                            # a failed open leaves no connection behind
+            self._db.close()
+            raise
 
     def close(self) -> None:
         self._db.close()

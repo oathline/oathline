@@ -5,7 +5,9 @@ an event, or inserting one in the middle, is detectable by `verify()`.
 The SQLite table refuses UPDATE and DELETE with triggers, and appends run
 under BEGIN IMMEDIATE so sequence numbers and links are computed under the
 write lock. The triggers stop accidents: someone with the file or the
-connection can remove them, or use INSERT OR REPLACE.
+connection can remove them, or use INSERT OR REPLACE. They are created with
+the table, once; opening an existing log writes nothing and takes no lock,
+so a log can be read and verified while another process is writing to it.
 
 Honest limit: someone who can write to the file can cut events off the end,
 or rewrite events from any point to the end and recompute their hashes.
@@ -56,16 +58,24 @@ class AuditLog:
         self.chain_id = chain_id
         self._clock_us = clock_us
         self._db = sqlite3.connect(path, isolation_level=None, timeout=10)
-        self._db.executescript(
-            "CREATE TABLE IF NOT EXISTS audit("
-            " seq INTEGER PRIMARY KEY, chain_id TEXT NOT NULL, ts INTEGER NOT NULL,"
-            " event_type TEXT NOT NULL, principal TEXT NOT NULL, action TEXT NOT NULL,"
-            " payload TEXT NOT NULL, payload_hash TEXT NOT NULL, prev_hash TEXT NOT NULL,"
-            " event_hash TEXT NOT NULL UNIQUE, schema_version INTEGER NOT NULL);"
-            "CREATE TRIGGER IF NOT EXISTS audit_no_update BEFORE UPDATE ON audit"
-            " BEGIN SELECT RAISE(ABORT, 'audit is append-only'); END;"
-            "CREATE TRIGGER IF NOT EXISTS audit_no_delete BEFORE DELETE ON audit"
-            " BEGIN SELECT RAISE(ABORT, 'audit is append-only'); END;")
+        try:
+            # Opening an existing log writes nothing, so it needs no lock and cannot wait on a writer.
+            # The table and its triggers are created together, once, when the file is new.
+            exists = self._db.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='audit'").fetchone()
+            if not exists:
+                self._db.executescript(
+                    "CREATE TABLE IF NOT EXISTS audit("
+                    " seq INTEGER PRIMARY KEY, chain_id TEXT NOT NULL, ts INTEGER NOT NULL,"
+                    " event_type TEXT NOT NULL, principal TEXT NOT NULL, action TEXT NOT NULL,"
+                    " payload TEXT NOT NULL, payload_hash TEXT NOT NULL, prev_hash TEXT NOT NULL,"
+                    " event_hash TEXT NOT NULL UNIQUE, schema_version INTEGER NOT NULL);"
+                    "CREATE TRIGGER IF NOT EXISTS audit_no_update BEFORE UPDATE ON audit"
+                    " BEGIN SELECT RAISE(ABORT, 'audit is append-only'); END;"
+                    "CREATE TRIGGER IF NOT EXISTS audit_no_delete BEFORE DELETE ON audit"
+                    " BEGIN SELECT RAISE(ABORT, 'audit is append-only'); END;")
+        except BaseException:                        # a failed open leaves no connection behind
+            self._db.close()
+            raise
 
     def close(self) -> None:
         self._db.close()

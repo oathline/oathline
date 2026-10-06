@@ -49,10 +49,12 @@ class TamperSweepTest(unittest.TestCase):
         path = os.path.join(self.tmp.name, "work.db")
         shutil.copyfile(self.clean, path)
         c = sqlite3.connect(path)
-        for sql, args in statements:
-            c.execute(sql, args)
-        c.commit()
-        c.close()
+        try:                                           # a statement that fails must not leave the file locked
+            for sql, args in statements:
+                c.execute(sql, args)
+            c.commit()
+        finally:
+            c.close()
         with AuditLog(path) as log:
             return log.verify(), log.verify(expected_head=self.head)
 
@@ -107,7 +109,7 @@ class TamperSweepTest(unittest.TestCase):
                                   (10,)))
         self.assertFalse(plain["ok"])
         plain, anchored = self.tampered(("INSERT INTO audit SELECT 50, chain_id, ts, event_type, principal, action,"
-                                         " payload, payload_hash, prev_hash, 'f' || substr(event_hash, 2),"
+                                         " payload, payload_hash, prev_hash, 'f' || substr(event_hash, 2, 63) || 'x',"
                                          " schema_version FROM audit WHERE seq=?", (49,)))
         self.assertFalse(plain["ok"])
         self.assertFalse(anchored["ok"])

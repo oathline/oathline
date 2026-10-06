@@ -210,6 +210,11 @@ class Engine:
         self.approver_check = approver_check
         self._executors: dict[str, Executor] = {}
 
+    def close(self) -> None:
+        """Close the audit log and the token store. An engine left open holds its SQLite connections."""
+        self.audit.close()
+        self.tokens.close()
+
     def register(self, capability: str, fn: Executor) -> None:
         if name_problem(capability):
             raise ValueError(f"cannot register an executor: {capability!r} is not a plain capability name")
