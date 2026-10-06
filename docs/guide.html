@@ -1,0 +1,76 @@
+<!doctype html>
+<!-- oathline.dev (GitHub Pages, source: main /docs). Not published until launch. -->
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Oathline guide</title>
+<meta name="description" content="How Oathline Core governs AI agents: capabilities, validation, approvals, tokens and audit.">
+<style>
+  :root { --bg:#fbfaf7; --fg:#1d1f23; --muted:#5b616b; --line:#e3e0d8; --accent:#1f6f5c; --code:#f1efe9; --card:#ffffff; }
+  @media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) { --bg:#121417; --fg:#e8e6e1; --muted:#a3a8b0; --line:#2a2e34; --accent:#5cc3a6; --code:#1b1e22; --card:#171a1e; } }
+  :root[data-theme="dark"] { --bg:#121417; --fg:#e8e6e1; --muted:#a3a8b0; --line:#2a2e34; --accent:#5cc3a6; --code:#1b1e22; --card:#171a1e; }
+  * { box-sizing:border-box }
+  html { scroll-behavior:smooth }
+  body { margin:0; background:var(--bg); color:var(--fg); font:17px/1.6 system-ui,-apple-system,"Segoe UI",sans-serif; }
+  header.top { border-bottom:1px solid var(--line); }
+  header.top nav { max-width:820px; margin:0 auto; padding:14px 16px; display:flex; gap:18px; align-items:center; flex-wrap:wrap }
+  header.top nav b { margin-right:auto; letter-spacing:.02em }
+  header.top a { color:var(--muted); text-decoration:none; font-size:15px }
+  main { max-width:820px; margin:0 auto; padding:48px 16px 80px; }
+  h1 { font-size:2.4rem; line-height:1.15; margin:0 0 12px; letter-spacing:-0.02em }
+  h2 { font-size:1.3rem; margin:52px 0 12px; scroll-margin-top:16px }
+  h3 { font-size:1.05rem; margin:22px 0 6px }
+  p.lead { font-size:1.2rem; color:var(--muted); margin:0 0 26px }
+  a { color:var(--accent) }
+  .btn { display:inline-block; padding:10px 16px; border:1px solid var(--accent); border-radius:8px; text-decoration:none; margin:0 10px 10px 0 }
+  .btn.primary { background:var(--accent); color:var(--bg) }
+  pre { background:var(--code); padding:16px; border-radius:8px; overflow-x:auto; font-size:14px; line-height:1.5 }
+  code { font-size:.92em }
+  ul.grid { list-style:none; padding:0; display:grid; grid-template-columns:repeat(auto-fit,minmax(230px,1fr)); gap:14px }
+  ul.grid li { background:var(--card); border:1px solid var(--line); border-radius:10px; padding:14px 16px }
+  ul.grid b { display:block; margin-bottom:4px }
+  ol.rules li { margin:6px 0 }
+  .note { font-size:14px; color:var(--muted) }
+  .pill { display:inline-block; font-size:12px; border:1px solid var(--line); border-radius:999px; padding:2px 10px; color:var(--muted); margin-bottom:8px }
+  footer { margin-top:56px; padding-top:18px; border-top:1px solid var(--line); color:var(--muted); font-size:14px }
+</style>
+</head>
+<body>
+<header class="top"><nav>
+  <b><a href="index.html" style="color:inherit;text-decoration:none">Oathline</a></b>
+  <a href="index.html#quickstart">Quickstart</a>
+  <a href="guide.html">Guide</a>
+</nav></header>
+<main>
+  <h1>Guide</h1>
+  <p class="lead">Oathline Core has four parts. Each one is small enough to read in one sitting.</p>
+  <h2 id="constitution">1. Constitution: capabilities and validation</h2>
+  <p>Declare every action an agent may take as a <code>Capability</code> in a frozen <code>Registry</code>: who may request it, whether it writes, and who may approve it. Anything that isn't declared is refused. Once the registry is built there's no API to widen a grant at runtime.</p>
+  <p><code>validate()</code> filters a model's proposed action before it reaches the engine. It keeps only known capabilities. It returns only capability names, arguments, a confidence and a list of violations, so no field of the model's output can carry authority; eleven top-level field names (<code>permission</code>, <code>permissions</code>, <code>grant</code>, <code>grants</code>, <code>approve</code>, <code>approved</code>, <code>approval</code>, <code>authority</code>, <code>sudo</code>, <code>admin</code>, <code>override</code>) are also reported. It keeps an argument only if it is declared and its value appears in the user's own text as whole words, in the same characters and case. Whatever the user wrote as a separate word passes (one word out of a longer phrase, or a piece of a number written with a space in it); a piece cut out of one word does not.</p>
+  <h2 id="approvals">2. Approvals</h2>
+  <p><code>Engine.request()</code> runs reads straight away. A writing or gated capability returns a token instead of running. <code>Engine.confirm()</code> runs the stored arguments exactly once. It refuses a principal whose name is on the non-human list (model, agent and infrastructure identities). That is a check on a name: a name that is not on the list counts as human unless you pass <code>humans=</code>, and without an approver check, anyone who can call <code>confirm()</code> with a human's name is that human, including an agent that holds the token. Pass <code>approver_check=</code> to the engine and <code>confirm()</code> also needs a proof, which your function checks against the exact action being confirmed.</p>
+  <p>An agent can also <code>propose()</code> a gated action. It is confirmed under a human's name: a named approver, or a human granted the capability. It then runs once, as the agent's action on that human's authority.</p>
+<pre>from oathline import Capability, Engine, Registry
+
+reg = Registry([Capability("site.deploy", frozenset({"builder-agent", "alice"}), writes=True,
+                           needs_confirmation=True, approvers=frozenset({"alice"}))])
+engine = Engine(reg, non_human=frozenset({"builder-agent"}))
+engine.register("site.deploy", lambda a: {"deployed": a["version"]})
+p = engine.propose("builder-agent", "site.deploy", {"version": "1.5.0"})   # nothing runs
+engine.confirm("alice", p["token"])                                       # runs once, both principals recorded</pre>
+  <h2 id="tokens">3. Tokens</h2>
+  <p>Confirmation tokens expire (30–3600 s), work once, and are bound by an integrity hash to the exact capability and arguments that were proposed. An expired or reused token is refused, and so is one whose stored arguments were changed while the stored hash was left alone. The hash has no key: someone who can write to the token store can change both.</p>
+  <h2 id="audit">4. Audit</h2>
+  <p><code>AuditLog</code> is an append-only SQLite hash chain. Triggers refuse UPDATE and DELETE; they stop accidents, not someone with the file, who can remove them. <code>verify()</code> detects a changed field, a deleted or swapped event and a broken hash. If you keep <code>head()</code> somewhere else and pass it to <code>verify(expected_head=...)</code>, it also detects events cut off the end and a rewritten tail. An action is recorded before it runs and again after.</p>
+  <h2 id="limits">Limits</h2>
+  <ul>
+    <li>Oathline doesn't authenticate people. Pass in principals your application has already authenticated.</li>
+    <li>It decides <em>whether</em> an executor runs, not what the executor does.</li>
+    <li>Anyone who can rewrite the whole audit file can forge a consistent chain unless you anchor the head elsewhere.</li>
+  </ul>
+  <p><a class="btn primary" href="https://github.com/oathline/oathline">Read the code</a></p>
+  <footer>MIT licence · © 2026 Nexxt Nest Group Pty Ltd (ABN 52 689 862 922) · <a href="privacy.html">Privacy</a></footer>
+</main>
+</body>
+</html>
