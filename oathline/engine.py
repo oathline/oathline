@@ -244,10 +244,43 @@ class Engine:
             return {"arguments_summary": {"reason": "too_large_when_masked", "count": len(arguments)}}
         return {"arguments": shown}
 
+    def _append(self, event_type: str, principal: str, action: str, payload: dict) -> bool:
+        """One audit write that must not take the call down with it. True when written; False when the log
+        could not be written (locked by another writer, full, closed). An interrupt landing inside the write
+        is rolled back by the log and passed on, as before."""
+        try:
+            self.audit.append(event_type, principal, action, payload)
+            return True
+        except Exception:  # noqa: BLE001
+            return False
+
     def _refuse(self, principal: object, capability: object, reason: str) -> dict:
-        """Refuse a request before it is a request. Nothing of the bad input goes into the log."""
-        self.audit.append("REQUEST_REFUSED", _safe(principal), _safe(capability), {"reason": reason})
-        return {"ok": False, "error": reason}
+        """Refuse a request before it is a request. Nothing of the bad input goes into the log. A refusal the
+        log cannot take is still returned, marked with `warning: refusal_not_recorded`."""
+        out = {"ok": False, "error": reason}
+        if not self._append("REQUEST_REFUSED", _safe(principal), _safe(capability), {"reason": reason}):
+            out["warning"] = "refusal_not_recorded"
+        return out
+
+    def _denied(self, principal: str, capability: str, message: str, **extra) -> dict:
+        """A refusal by the registry. Returned whether or not the log could take the `DENIED` record."""
+        out = {"ok": False, "error": "denied", "message": message}
+        if not self._append("DENIED", principal, capability, {"reason": message, **extra}):
+            out["warning"] = "refusal_not_recorded"
+        return out
+
+    def _give_back(self, token: str, confirmer: str) -> dict:
+        """The log could not record a confirmation, so nothing ran. The token goes back to `proposed`, so the
+        same confirmation can be made again once the log is free. If the store cannot take it back either,
+        the token stays spent and the caller is told (`warning: token_spent`)."""
+        out = {"ok": False, "state": "not_run", "error": "audit_write_failed"}
+        try:
+            released = self.tokens.release(token, confirmer) is True
+        except Exception:  # noqa: BLE001
+            released = False
+        if not released:
+            out["warning"] = "token_spent"
+        return out
 
     def _admit(self, principal: object, capability: object, arguments: object):
         """Check the inputs of request() and propose(). Returns (arguments, None) or (None, refusal)."""
@@ -273,8 +306,13 @@ class Engine:
             arguments_hash = self.tokens.get(token)["integrity"]
         except Exception:  # noqa: BLE001 - no stored proposal, no token
             return self._refuse(principal, capability, "proposal_not_stored")
-        self.audit.append(event, principal, capability,
-                          {"token": token, "ttl_seconds": self.tokens.ttl, "arguments_hash": arguments_hash, **extra})
+        if not self._append(event, principal, capability,
+                            {"token": token, "ttl_seconds": self.tokens.ttl, "arguments_hash": arguments_hash, **extra}):
+            try:                                     # a proposal with no record is withdrawn: it must not run later
+                self.tokens.withdraw(token)
+            except Exception:  # noqa: BLE001 - it then expires on its own
+                pass
+            return {"ok": False, "state": "not_run", "error": "audit_write_failed"}
         return {"ok": True, "state": "proposed", "token": token}
 
     # ------------------------------------------------------------------
@@ -283,14 +321,15 @@ class Engine:
         arguments, refusal = self._admit(principal, capability, arguments)
         if refusal:
             return refusal
-        self.audit.append("REQUEST", principal, capability, self._for_audit(capability, arguments))
+        if not self._append("REQUEST", principal, capability, self._for_audit(capability, arguments)):
+            return {"ok": False, "state": "not_run", "error": "audit_write_failed"}      # no record, no request
         try:
             grant = self.registry.authorize(principal, capability)
         except Denied as e:
-            self.audit.append("DENIED", principal, capability, {"reason": str(e)})
-            return {"ok": False, "error": "denied", "message": str(e)}
-        self.audit.append("AUTHORIZED", principal, capability,
-                          {"writes": grant.writes, "needs_confirmation": grant.needs_confirmation})
+            return self._denied(principal, capability, str(e))
+        if not self._append("AUTHORIZED", principal, capability,
+                            {"writes": grant.writes, "needs_confirmation": grant.needs_confirmation}):
+            return {"ok": False, "state": "not_run", "error": "audit_write_failed"}
         cap = self.registry.get(capability)
         if cap is not None and cap.gated:
             agent = self._is_agent(principal)
@@ -307,18 +346,20 @@ class Engine:
         arguments, refusal = self._admit(agent, capability, arguments)
         if refusal:
             return refusal
-        self.audit.append("REQUEST", agent, capability,
-                          {**self._for_audit(capability, arguments), "mode": "agent_proposal"})
+        if not self._append("REQUEST", agent, capability,
+                            {**self._for_audit(capability, arguments), "mode": "agent_proposal"}):
+            return {"ok": False, "state": "not_run", "error": "audit_write_failed"}      # no record, no proposal
         try:
             grant = self.registry.authorize(agent, capability)
         except Denied as e:
-            self.audit.append("DENIED", agent, capability, {"reason": str(e)})
-            return {"ok": False, "error": "denied", "message": str(e)}
+            return self._denied(agent, capability, str(e))
         cap = self.registry.get(capability)
         if cap is None or not cap.gated:
-            self.audit.append("DENIED", agent, capability, {"reason": "not a gated capability"})
-            return {"ok": False, "error": "not_gated",
-                    "message": "agent proposals are for capabilities that need a human's confirmation"}
+            out = {"ok": False, "error": "not_gated",
+                   "message": "agent proposals are for capabilities that need a human's confirmation"}
+            if not self._append("DENIED", agent, capability, {"reason": "not a gated capability"}):
+                out["warning"] = "refusal_not_recorded"
+            return out
         out = self._propose(agent, capability, arguments, "PROPOSED_BY_AGENT",
                             {"writes": grant.writes, "approvers": sorted(cap.approvers) or "any granted human"})
         if out["ok"]:
@@ -368,8 +409,10 @@ class Engine:
     def _refuse_confirm(self, principal: object, token: object, reason: str, action: str = "confirm",
                         **extra) -> dict:
         shown = token if isinstance(token, str) and TOKEN_SHAPE.fullmatch(token) else "invalid"
-        self.audit.append("CONFIRM_REFUSED", _safe(principal), action, {"token": shown, "reason": reason, **extra})
-        return {"ok": False, "error": reason}
+        out = {"ok": False, "error": reason}
+        if not self._append("CONFIRM_REFUSED", _safe(principal), action, {"token": shown, "reason": reason, **extra}):
+            out["warning"] = "refusal_not_recorded"
+        return out
 
     def confirm(self, principal: str, token: str, proof: object = None) -> dict:
         """Second call. Runs exactly what was proposed, once.
@@ -416,13 +459,13 @@ class Engine:
                 return self._refuse_confirm(principal, token, conf.error, rec["capability"], proposer=rec["principal"])
             if approved is not None and conf.integrity != approved["arguments_hash"]:
                 return self._refuse_confirm(principal, token, "changed_after_approval", conf.capability)
-            self.audit.append("CONFIRMED_BY_HUMAN", principal, conf.capability,
-                              {"token": token, "proposer": conf.proposer})
+            if not self._append("CONFIRMED_BY_HUMAN", principal, conf.capability,
+                                {"token": token, "proposer": conf.proposer}):
+                return self._give_back(token, principal)   # no record of the confirmation: nothing runs, token back
             try:                                     # the agent must still hold the grant it proposed under
                 self.registry.authorize(conf.proposer, conf.capability)
             except Denied as e:
-                self.audit.append("DENIED", conf.proposer, conf.capability, {"reason": str(e), "confirmed_by": principal})
-                return {"ok": False, "error": "denied", "message": str(e)}
+                return self._denied(conf.proposer, conf.capability, str(e), confirmed_by=principal)
             return self._execute(conf.proposer, conf.capability, conf.arguments or {}, confirmed_by=principal,
                                  token=token, arguments_hash=conf.integrity)
         conf = self._store(self.tokens.confirm, principal, token)
@@ -430,12 +473,12 @@ class Engine:
             return self._refuse_confirm(principal, token, conf.error)
         if approved is not None and conf.integrity != approved["arguments_hash"]:
             return self._refuse_confirm(principal, token, "changed_after_approval", conf.capability)
-        self.audit.append("CONFIRMED", principal, conf.capability, {"token": token})
+        if not self._append("CONFIRMED", principal, conf.capability, {"token": token}):
+            return self._give_back(token, principal)       # no record of the confirmation: nothing runs, token back
         try:
             self.registry.authorize(principal, conf.capability)      # re-check on the STORED capability
         except Denied as e:
-            self.audit.append("DENIED", principal, conf.capability, {"reason": str(e)})
-            return {"ok": False, "error": "denied", "message": str(e)}
+            return self._denied(principal, conf.capability, str(e))
         return self._execute(principal, conf.capability, conf.arguments or {}, token=token,
                              arguments_hash=conf.integrity)
 
@@ -486,14 +529,18 @@ class Engine:
                  token: str = "", arguments_hash: str = "") -> dict:
         fn = self._executors.get(capability)
         if fn is None:
-            self.audit.append("EXECUTE_REFUSED", principal, capability, {"reason": "no_executor"})
-            return {"ok": False, "error": "no_executor"}
+            out = {"ok": False, "error": "no_executor"}
+            if not self._append("EXECUTE_REFUSED", principal, capability, {"reason": "no_executor"}):
+                out["warning"] = "refusal_not_recorded"
+            return out
         by = {"confirmed_by": confirmed_by} if confirmed_by else {}
         what = {"token": token, "arguments_hash": arguments_hash} if token else {}
         unrecorded = {"ok": False, "state": "ran_unrecorded", "error": "ran_but_not_recorded"}
         try:                                         # no record, no run
             seq = self.audit.append("EXECUTING", principal, capability, {**by, **what})["seq"]
-        except Exception:  # noqa: BLE001 - fail closed
+        except Exception:  # noqa: BLE001 - fail closed; a confirmed token goes back so the human can try again
+            if token:
+                return self._give_back(token, confirmed_by or principal)
             return {"ok": False, "state": "not_run", "error": "audit_write_failed"}
         by = {**by, "executing_seq": seq}            # every outcome names the EXECUTING event it belongs to
         try:

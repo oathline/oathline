@@ -71,13 +71,13 @@ What it does not protect against is listed in full [further down](#what-oathline
 
 Standard library only. Python 3.10+.
 
-The whole `oathline/` package is 1362 lines of Python in 6 files. Count them yourself from the repository root:
+The whole `oathline/` package is 1430 lines of Python in 6 files. Count them yourself from the repository root:
 
 ```bash
 python -c "import glob; print(sum(1 for f in glob.glob('oathline/*.py') for _ in open(f, encoding='utf-8')))"
 ```
 
-The repository has 241 tests. `python -m unittest discover -s tests` runs them and prints the count.
+The repository has 246 tests. `python -m unittest discover -s tests` runs them and prints the count.
 
 An earlier version of Oathline Core recorded 233 events in its hash-chained audit log during one internal job for our own company (30 Sep to 2 Oct 2026).
 The job's audit logs are private, so this can't be checked from this repository.
@@ -253,7 +253,7 @@ python -m unittest discover -s tests
 ```
 
 The example shows a read running, a write waiting for a human, and the audit log proving it.
-The 241 tests need no network.
+The 246 tests need no network.
 
 The same flow in your own code. This block runs as written; the stand-ins at the top
 (`user_text`, `model_output`, `send_email`, `show_to_a_human`) are where your app plugs in:
@@ -467,7 +467,7 @@ check it before using `v.candidates[0]`.
 | `token_store_unavailable` | The token store did not answer (locked, closed). Nothing ran; try again |
 | `execution_failed` | The executor raised an error. The error text is in the `EXECUTE_FAILED` event in the audit log |
 | `execution_returned_failure` | The executor returned `"ok": False`. `state` is `failed`; `result` holds what it returned |
-| `audit_write_failed` | The `EXECUTING` record could not be written, so the executor was not called. `state` is `not_run` |
+| `audit_write_failed` | A record the call needs before it may go on (`REQUEST`, `AUTHORIZED`, `PROPOSED`, `CONFIRMED`, `EXECUTING`) could not be written, so nothing ran and nothing was kept: a proposal with no record is withdrawn, and a confirmed token is given back so the same confirmation can be made again once the log is free. `state` is `not_run`. If the token could not be given back either, `warning` is `token_spent` |
 | `ran_but_not_recorded` | The executor ran and its outcome could not be written to the log. `state` is `ran_unrecorded` |
 
 **Reading the audit log.** `engine.audit.events()` returns a list of dicts, oldest first. Each has `seq`,
@@ -566,10 +566,15 @@ see [SECURITY.md](https://github.com/oathline/oathline/blob/main/SECURITY.md).
 
 **The record**
 
-- If the audit log can't be written, `request()`, `propose()` and `confirm()` raise an error where they would
-  otherwise record a refusal. Nothing runs in that case. If the token store can't be read, `confirm()`
-  refuses with `token_store_unavailable`. `engine.action()`, `engine.unfinished()` and
-  `engine.mismatched_runs()` read the stores directly and raise the store's own error if it can't be read.
+- If the audit log can't be written (another writer holds the file for longer than the 30-second wait, a full
+  disk, a closed file), `request()`, `propose()` and `confirm()` do not raise. A refusal is still returned,
+  with `warning: refusal_not_recorded`. A record the call needs before it may go on is refused as
+  `audit_write_failed`: nothing runs, a proposal with no record is withdrawn, and a confirmed token is given
+  back to `proposed` so the human can confirm again (`warning: token_spent` if even that failed). If the token
+  store can't be read, `confirm()` refuses with `token_store_unavailable`. `engine.action()`,
+  `engine.unfinished()` and `engine.mismatched_runs()` read the stores directly and raise the store's own
+  error if it can't be read. Before 0.1.2 a locked log made these calls raise, and a confirmation that
+  arrived while the log was locked was lost: the token was spent and nothing ran or was recorded.
 - Something that is not an ordinary `Exception` (`SystemExit`, `KeyboardInterrupt`, `asyncio.CancelledError`,
   `GeneratorExit`) is never swallowed: it reaches your program. Whether it is written to the audit log first
   depends on where it was raised.

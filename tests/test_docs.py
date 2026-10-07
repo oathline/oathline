@@ -105,7 +105,7 @@ class VersionTest(unittest.TestCase):
         import oathline
         in_pyproject = re.search(r'^version = "([^"]+)"$', read("pyproject.toml"), flags=re.M).group(1)
         in_changelog = re.search(r"^## (\d+\.\d+\.\d+)", read("CHANGELOG.md"), flags=re.M).group(1)
-        self.assertEqual({oathline.__version__, in_pyproject, in_changelog}, {"0.1.1"})
+        self.assertEqual({oathline.__version__, in_pyproject, in_changelog}, {"0.1.2"})
 
     def test_package_metadata_matches_the_repository(self):
         pyproject = read("pyproject.toml")

@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "oathline"
-version = "0.1.1"
+version = "0.1.2"
 description = "A small governance core for AI agents that take real actions: allowlisted capabilities, validated model output, human confirmation tokens and a hash-chained audit log."
 readme = "README.md"
 license = "MIT"

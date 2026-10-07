@@ -36,6 +36,7 @@ GENESIS_PREFIX = "OATHLINE-AUDIT-GENESIS:"
 BODY_FIELDS = ("chain_id", "seq", "ts", "event_type", "principal", "action",
                "payload_hash", "prev_hash", "schema_version")
 TRIGGERS = frozenset({"audit_no_update", "audit_no_delete"})
+BUSY_TIMEOUT_SECONDS = 30      # how long one append waits for another writer's transaction before it fails
 SCHEMA = ("CREATE TABLE IF NOT EXISTS audit("
           " seq INTEGER PRIMARY KEY, chain_id TEXT NOT NULL, ts INTEGER NOT NULL,"
           " event_type TEXT NOT NULL, principal TEXT NOT NULL, action TEXT NOT NULL,"
@@ -70,7 +71,7 @@ class AuditLog:
             raise AuditError("chain_id must be a non-empty str <= 64")
         self.chain_id = chain_id
         self._clock_us = clock_us
-        self._db = sqlite3.connect(path, isolation_level=None, timeout=10)
+        self._db = sqlite3.connect(path, isolation_level=None, timeout=BUSY_TIMEOUT_SECONDS)
         try:
             # Opening an existing log writes nothing, so it needs no write lock and cannot wait on a writer.
             # The table and its triggers are created in one transaction when the table is missing, so a

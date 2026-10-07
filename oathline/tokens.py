@@ -50,6 +50,7 @@ TTL_MIN, TTL_MAX = 30, 3600
 STATES = ("proposed", "used", "expired")
 _HASH_SHAPE = re.compile(r"[0-9a-f]{64}")
 ARGUMENTS_MAX_DEPTH = 32       # objects and lists inside one another; deeper arguments are refused
+BUSY_TIMEOUT_SECONDS = 30      # how long one write waits for another writer's transaction before it fails
 
 
 class ConfigError(Exception):
@@ -119,7 +120,7 @@ class TokenStore:
             raise ConfigError(f"ttl_seconds must be an int in [{TTL_MIN}, {TTL_MAX}]")
         self.ttl = ttl_seconds
         self._clock = clock
-        self._db = sqlite3.connect(path, timeout=10)
+        self._db = sqlite3.connect(path, timeout=BUSY_TIMEOUT_SECONDS)
         try:
             # Opening an existing store writes nothing, so it needs no lock and cannot wait on a writer.
             exists = self._db.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='proposals'").fetchone()
@@ -238,3 +239,22 @@ class TokenStore:
             return Confirmed(False, error="already_used")
         return Confirmed(True, capability=capability, arguments=arguments, proposer=p_principal,
                          confirmer=confirmer or p_principal, integrity=integrity)
+
+    def release(self, token: str, confirmer: str) -> bool:
+        """Give a token back after a confirmation that could not be recorded and so ran nothing: the row goes
+        from `used` back to `proposed`, only if it was marked used by this same confirmer. True when it did.
+        The engine calls this only before an executor has been called; a token whose action ran stays used."""
+        if type(token) is not str or type(confirmer) is not str:
+            return False
+        n = self._db.execute("UPDATE proposals SET state='proposed', confirmed_by=NULL"
+                             " WHERE id=? AND state='used' AND confirmed_by=?", (token, confirmer)).rowcount
+        self._db.commit()
+        return n == 1
+
+    def withdraw(self, token: str) -> bool:
+        """Expire a proposal that could not be recorded, so it can never run. True when a pending row was expired."""
+        if type(token) is not str:
+            return False
+        n = self._db.execute("UPDATE proposals SET state='expired' WHERE id=? AND state='proposed'", (token,)).rowcount
+        self._db.commit()
+        return n == 1

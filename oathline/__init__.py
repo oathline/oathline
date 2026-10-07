@@ -11,7 +11,7 @@ from .engine import Engine, is_non_human
 from .tokens import ConfigError, Confirmed, TokenStore
 from .validator import FORBIDDEN_KEYS, Validated, validate
 
-__version__ = "0.1.1"
+__version__ = "0.1.2"
 __all__ = ["AuditError", "AuditLog", "Capability", "ConfigError", "Confirmed", "Denied", "Engine",
            "FORBIDDEN_KEYS", "Grant", "Registry", "TokenStore", "Validated", "__version__",
            "is_non_human", "validate"]

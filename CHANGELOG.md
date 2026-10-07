@@ -1,5 +1,47 @@
 # Changelog
 
+## 0.1.2
+
+A locked audit log no longer makes the engine raise, and no longer loses a human's confirmation.
+
+### What was wrong in 0.1.0 and 0.1.1
+
+- Every write to a file-backed audit log or token store waited at most 10 seconds for another writer to
+  finish. In the twenty-thread race (`tests/test_race.py`) one round makes about 22 writes to the log, one
+  after another; on a slow disk the wait ran out, and `confirm()` raised `sqlite3.OperationalError: database
+  is locked` straight to the caller. The test run on the `v0.1.1` tag failed that way on GitHub's Windows
+  runner with Python 3.12 (three of twenty threads), while the same commit had passed twice minutes earlier.
+  The timing was the runner's; the raise was the package's.
+- Worse than the raise: when the wait ran out after the token had been marked used and before the `CONFIRMED`
+  record was written, the confirmation was lost. Nothing ran, nothing was recorded, and the next
+  `confirm()` with that token was refused as `already_used`. The same loss happened when the `EXECUTING`
+  record could not be written (`audit_write_failed`, `state: not_run`): the token stayed spent.
+- A refusal that could not be recorded (`CONFIRM_REFUSED`, `REQUEST_REFUSED`, `DENIED`, `EXECUTE_REFUSED`)
+  raised instead of being returned. In the race, the nineteen losing threads write `CONFIRM_REFUSED`; a thread
+  that raised never closed its connections, which is why the temporary folder could not be removed afterwards.
+- The 0.1.0 entry below says the three calls "do not raise, for any names, arguments, token or proof they are
+  given". That was true of the inputs and silent about the log. The README said that a log that cannot be
+  written makes the calls raise. Neither said that a confirmation could be lost.
+
+### What changed
+
+- `request()`, `propose()` and `confirm()` never raise for a log that cannot be written. A refusal is
+  returned with `warning: refusal_not_recorded`. A record the call needs before it may go on (`REQUEST`,
+  `AUTHORIZED`, `PROPOSED`, `CONFIRMED`, `CONFIRMED_BY_HUMAN`, `EXECUTING`) that cannot be written is refused
+  as `audit_write_failed` with `state: not_run`, and nothing is kept: a proposal with no record is withdrawn
+  (`TokenStore.withdraw`, it expires), and a confirmed token is given back to `proposed`
+  (`TokenStore.release`) so the same confirmation can be made again once the log is free. If the store
+  cannot take the token back either, the caller is told (`warning: token_spent`). The executor is never
+  called in any of these cases, so a token that is given back has run nothing.
+- The wait for another writer is 30 seconds (`BUSY_TIMEOUT_SECONDS` in `oathline/audit.py` and
+  `oathline/tokens.py`), up from 10.
+- Interrupts (`SystemExit` and the like) inside a log write are rolled back and passed on, as before.
+- Five new tests in `tests/test_lock_failure.py`: a locked log at the moment of confirmation, at a refusal, at
+  a proposal, a store that cannot give the token back, and twenty confirmers on a log whose writes fail three
+  times in ten. The race test is unchanged and passed 500 rounds in a row on the development machine before
+  release. Two rows added to `ATTACKS.md`.
+- Version 0.1.2 in `pyproject.toml`, `oathline/__init__.py` and this file.
+
 ## 0.1.1
 
 Documentation and packaging only. No change to the package's behaviour; the 0.1.0 guarantees below stand unchanged.
