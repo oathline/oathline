@@ -543,6 +543,16 @@ class Engine:
                 return self._give_back(token, confirmed_by or principal)
             return {"ok": False, "state": "not_run", "error": "audit_write_failed"}
         by = {**by, "executing_seq": seq}            # every outcome names the EXECUTING event it belongs to
+        if token:                                    # the action starts: from here the token can never be given back
+            try:
+                marked = self.tokens.mark_running(token, confirmed_by or principal) is True
+            except Exception:  # noqa: BLE001
+                marked = False
+            if not marked:                           # the store did not answer: no run; the EXECUTING gets its outcome
+                self._record_outcome("EXECUTE_FAILED", principal, capability,
+                                     {"error": "token_not_marked_running", **by}, by)
+                out = self._give_back(token, confirmed_by or principal)
+                return {**out, "error": "token_store_unavailable"}
         try:
             # the principal the caller named is injected here, never taken from arguments
             # reserved keys are injected here only - never taken from the (model- or agent-supplied) arguments

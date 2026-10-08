@@ -99,7 +99,7 @@ class LockedAuditTest(unittest.TestCase):
         finally:
             self.release_lock()
         rows = self.eng.tokens._db.execute("SELECT state FROM proposals ORDER BY created").fetchall()
-        self.assertEqual([r[0] for r in rows], ["used"])                         # nothing was stored for them
+        self.assertEqual([r[0] for r in rows], ["running"])                      # the one that ran; nothing stored for them
         self.assertEqual(self.ran, ["alice"])
         self.assertTrue(self.eng.audit.verify()["ok"])
         self.assertEqual(self.types().count("EXECUTED"), 1)
@@ -145,6 +145,70 @@ class LockedAuditTest(unittest.TestCase):
             self.assertEqual(eng.confirm("alice", token)["error"], "already_used")
         finally:
             eng.close()
+
+
+class ReleaseAfterRunTest(unittest.TestCase):
+    """The review of 8 Oct: release() must never re-arm a token whose action has started. Once EXECUTING is
+    recorded the token is `running`; release() works from `used` only."""
+
+    def test_release_after_the_action_ran_returns_false_and_the_action_runs_once(self):
+        ran = []
+        eng = Engine(registry())
+        eng.register("pay.send", lambda a: ran.append(1) or {"paid": True})
+        eng.register("files.read", lambda a: {})
+        token = eng.request("alice", "pay.send", {"amount": "10"})["token"]
+        self.assertEqual(eng.confirm("alice", token)["state"], "executed")
+        self.assertEqual(ran, [1])
+        self.assertEqual(eng.tokens.get(token)["state"], "running")          # started; stays so after the run
+        self.assertIs(eng.tokens.release(token, "alice"), False)              # 0.1.2 as first built returned True here
+        self.assertEqual(eng.tokens.get(token)["state"], "running")
+        self.assertEqual(eng.confirm("alice", token)["error"], "already_used")
+        self.assertEqual(ran, [1])
+        self.assertEqual(eng.mismatched_runs(), [])
+        self.assertEqual([e["event_type"] for e in eng.audit.events()].count("EXECUTING"), 1)
+
+    def test_release_works_only_from_used_and_only_for_the_same_confirmer(self):
+        eng = Engine(registry())
+        eng.register("pay.send", lambda a: {"paid": True})
+        token = eng.request("alice", "pay.send", {"amount": "10"})["token"]
+        self.assertIs(eng.tokens.release(token, "alice"), False)              # proposed: nothing to give back
+        conf = eng.tokens.confirm("alice", token)                             # used, nothing run yet
+        self.assertTrue(conf.ok)
+        self.assertIs(eng.tokens.release(token, "mallory"), False)            # another name: no
+        self.assertIs(eng.tokens.release(token, "alice"), True)               # the same confirmer, before any run: yes
+        self.assertEqual(eng.tokens.get(token)["state"], "proposed")
+        self.assertTrue(eng.tokens.mark_running(token, "alice") is False)     # not used: cannot be marked running
+
+    def test_a_crash_after_executing_leaves_the_token_running_and_unreleasable(self):
+        eng = Engine(registry())
+
+        def dies(a):
+            raise KeyboardInterrupt()
+
+        eng.register("pay.send", dies)
+        token = eng.request("alice", "pay.send", {"amount": "10"})["token"]
+        with self.assertRaises(KeyboardInterrupt):
+            eng.confirm("alice", token)
+        self.assertEqual(eng.tokens.get(token)["state"], "running")
+        self.assertIs(eng.tokens.release(token, "alice"), False)
+        self.assertEqual(eng.confirm("alice", token)["error"], "already_used")
+
+    def test_if_the_token_cannot_be_marked_running_the_executor_is_not_called(self):
+        class StuckStore(TokenStore):
+            def mark_running(self, token, confirmer):
+                return False
+
+        ran = []
+        eng = Engine(registry(), tokens=StuckStore())
+        eng.register("pay.send", lambda a: ran.append(1) or {"paid": True})
+        token = eng.request("alice", "pay.send", {"amount": "10"})["token"]
+        out = eng.confirm("alice", token)
+        self.assertEqual((out["ok"], out["state"], out["error"]), (False, "not_run", "token_store_unavailable"))
+        self.assertEqual(ran, [])
+        types_ = [e["event_type"] for e in eng.audit.events()]
+        self.assertEqual(types_[-2:], ["EXECUTING", "EXECUTE_FAILED"])        # the EXECUTING got its outcome
+        self.assertEqual(eng.unfinished(), [])
+        self.assertEqual(eng.tokens.get(token)["state"], "proposed")          # given back: nothing ran
 
 
 class FlakyLogRaceTest(unittest.TestCase):

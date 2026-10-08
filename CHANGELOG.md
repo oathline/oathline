@@ -33,12 +33,25 @@ A locked audit log no longer makes the engine raise, and no longer loses a human
   (`TokenStore.release`) so the same confirmation can be made again once the log is free. If the store
   cannot take the token back either, the caller is told (`warning: token_spent`). The executor is never
   called in any of these cases, so a token that is given back has run nothing.
+- A token that has been given back can never be one whose action ran. The store has a fourth state,
+  `running`, set by the engine right after the `EXECUTING` record is written and before the executor is
+  called (`TokenStore.mark_running`); `release()` works from `used` only and refuses `running`, in the store
+  itself, so no caller can re-arm a token that ran (found in review on 8 Oct, before any release: the first
+  build of 0.1.2 let `release()` re-arm a used token after its action, and the next confirm ran it again).
+  If the store cannot mark the token running, the executor is not called, the `EXECUTING` event gets an
+  `EXECUTE_FAILED` outcome (`token_not_marked_running`), the token is given back, and the caller gets
+  `token_store_unavailable` with `state: not_run`.
+- Stated plainly in the README: the log can hold two `CONFIRMED` events for one run (a first attempt whose
+  `EXECUTING` write failed, then the attempt that ran; one `EXECUTING` only), and one `confirm()` on a badly
+  contended file can wait up to six times 30 seconds before it refuses.
 - The wait for another writer is 30 seconds (`BUSY_TIMEOUT_SECONDS` in `oathline/audit.py` and
   `oathline/tokens.py`), up from 10.
 - Interrupts (`SystemExit` and the like) inside a log write are rolled back and passed on, as before.
-- Five new tests in `tests/test_lock_failure.py`: a locked log at the moment of confirmation, at a refusal, at
-  a proposal, a store that cannot give the token back, and twenty confirmers on a log whose writes fail three
-  times in ten. The race test is unchanged and passed 500 rounds in a row on the development machine before
+- Nine new tests in `tests/test_lock_failure.py`: a locked log at the moment of confirmation, at a refusal, at
+  a proposal, a store that cannot give the token back, twenty confirmers on a log whose writes fail three
+  times in ten, release after the action ran (refused, the action ran once), release from `used` only and
+  for the same confirmer only, a crash after `EXECUTING` (the token stays `running`), and a store that
+  cannot mark the token running (no run). The race test is unchanged and passed 500 rounds in a row on the development machine before
   release. Two rows added to `ATTACKS.md`.
 - Version 0.1.2 in `pyproject.toml`, `oathline/__init__.py` and this file.
 

@@ -31,6 +31,11 @@ no longer match its hash is refused as `tampered`.
 
 Lifetimes are fixed per store and bounded; there is no extend(): a renewal
 is a new proposal with a new token.
+
+States: `proposed` (waiting), `used` (confirmed, nothing run yet; the only
+state a token can be given back from, by `release()`), `running` (the engine
+wrote `EXECUTING` and marked the token with `mark_running()`: no way back,
+a confirm is `already_used`), `expired`.
 """
 from __future__ import annotations
 
@@ -47,7 +52,7 @@ from typing import Callable
 from .capabilities import name_problem
 
 TTL_MIN, TTL_MAX = 30, 3600
-STATES = ("proposed", "used", "expired")
+STATES = ("proposed", "used", "running", "expired")   # used: confirmed, nothing run yet; running: the action started
 _HASH_SHAPE = re.compile(r"[0-9a-f]{64}")
 ARGUMENTS_MAX_DEPTH = 32       # objects and lists inside one another; deeper arguments are refused
 BUSY_TIMEOUT_SECONDS = 30      # how long one write waits for another writer's transaction before it fails
@@ -209,7 +214,7 @@ class TokenStore:
             why = same_principal_check(p_principal)
             if why:
                 return Confirmed(False, error=why)
-        if state == "used":
+        if state in ("used", "running"):
             return Confirmed(False, error="already_used")
         now = self._now()
         if now is None:
@@ -240,10 +245,21 @@ class TokenStore:
         return Confirmed(True, capability=capability, arguments=arguments, proposer=p_principal,
                          confirmer=confirmer or p_principal, integrity=integrity)
 
+    def mark_running(self, token: str, confirmer: str) -> bool:
+        """The action is about to start: the row goes from `used` to `running`, only for the confirmer that used
+        it. From `running` there is no way back: release() refuses it, and a confirm is `already_used`."""
+        if type(token) is not str or type(confirmer) is not str:
+            return False
+        n = self._db.execute("UPDATE proposals SET state='running' WHERE id=? AND state='used' AND confirmed_by=?",
+                             (token, confirmer)).rowcount
+        self._db.commit()
+        return n == 1
+
     def release(self, token: str, confirmer: str) -> bool:
         """Give a token back after a confirmation that could not be recorded and so ran nothing: the row goes
-        from `used` back to `proposed`, only if it was marked used by this same confirmer. True when it did.
-        The engine calls this only before an executor has been called; a token whose action ran stays used."""
+        from `used` back to `proposed`, only if it was marked used by this same confirmer and the action has
+        not started (state `used`, never `running`). True when it did. The store itself refuses anything else,
+        so no caller, including code in the same process, can re-arm a token whose action ran (review of 8 Oct)."""
         if type(token) is not str or type(confirmer) is not str:
             return False
         n = self._db.execute("UPDATE proposals SET state='proposed', confirmed_by=NULL"
