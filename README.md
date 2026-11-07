@@ -71,13 +71,13 @@ What it does not protect against is listed in full [further down](#what-oathline
 
 Standard library only. Python 3.10+.
 
-The whole `oathline/` package is 1680 lines of Python in 6 files. Count them yourself from the repository root:
+The whole `oathline/` package is 1767 lines of Python in 6 files. Count them yourself from the repository root:
 
 ```bash
 python -c "import glob; print(sum(1 for f in glob.glob('oathline/*.py') for _ in open(f, encoding='utf-8')))"
 ```
 
-The repository has 273 tests. `python -m unittest discover -s tests` runs them and prints the count.
+The repository has 285 tests. `python -m unittest discover -s tests` runs them and prints the count.
 
 An earlier version of Oathline Core recorded 233 events in its hash-chained audit log during one internal job for our own company (30 Sep to 2 Oct 2026).
 The job's audit logs are private, so this can't be checked from this repository.
@@ -253,7 +253,7 @@ python -m unittest discover -s tests
 ```
 
 The example shows a read running, a write waiting for a human, and the audit log proving it.
-The 273 tests need no network.
+The 285 tests need no network.
 
 The same flow in your own code. This block runs as written; the stand-ins at the top
 (`user_text`, `model_output`, `send_email`, `show_to_a_human`) are where your app plugs in:
@@ -474,6 +474,10 @@ check it before using `v.candidates[0]`.
 | `item_not_in_text` | A spoken, preset or kept item is not in the shown text as whole words (its `said` form, else its value; a kept item's label). `key` names the item. Nothing was shown |
 | `unshown_mark` | A list item (ticks, names, signers) has an element that is not in the shown text, and no declared `whole_word` for the list is in it either. `key` names the item. Nothing was shown |
 | `screen_not_allowed` | An item marked `shown_as: "screen"` was shown by voice, or its label is not in the text. Show it on a `screen` or `card` channel with its label in the text |
+| `unheard` | A capability declared `heard=True` was confirmed with no HEARD event for its token: the human was never shown it, or the product never said the text was delivered. Call `show()` then `hear()` first. Nothing ran; the token is not spent |
+| `stale_hearing` | The items of the proposal are no longer the ones the human heard (a correction, or a rewritten store). Show and hear the proposal again. Nothing ran; the token is not spent |
+| `not_shown` | `hear()` was called before any `show()` for this token |
+| `stale_showing` | `hear()` was called, but the proposal's items are no longer the ones that were shown. Show it again |
 | `execution_failed` | The executor raised an error. The error text is in the `EXECUTE_FAILED` event in the audit log |
 | `execution_returned_failure` | The executor returned `"ok": False`. `state` is `failed`; `result` holds what it returned |
 | `audit_write_failed` | A record the call needs before it may go on (`REQUEST`, `AUTHORIZED`, `PROPOSED`, `CONFIRMED`, `EXECUTING`) could not be written, so nothing ran and nothing was kept: a proposal with no record is withdrawn, and a confirmed token is given back so the same confirmation can be made again once the log is free. `state` is `not_run`. If the token could not be given back either, `warning` is `token_spent` |
@@ -485,7 +489,7 @@ check it before using `v.candidates[0]`.
 (a dict) and the hash fields. A principal or capability that was refused as a bad name is logged as the
 word `invalid`. The event types are `REQUEST`, `REQUEST_REFUSED`, `AUTHORIZED`, `DENIED`,
 `PROPOSED`, `PROPOSED_BY_AGENT`, `CONFIRMED`, `CONFIRMED_BY_HUMAN`, `CONFIRM_REFUSED`, `EXECUTE_REFUSED`,
-`EXECUTING`, `EXECUTED`, `EXECUTE_FAILED` and `VERIFIED`. The hearing rule (0.2.0) adds `SHOW_REFUSED`, `SHOWN`. `engine.unfinished()` lists `EXECUTING` events
+`EXECUTING`, `EXECUTED`, `EXECUTE_FAILED` and `VERIFIED`. The hearing rule (0.2.0) adds `HEAR_REFUSED`, `HEARD`, `SHOW_REFUSED`, `SHOWN`. `engine.unfinished()` lists `EXECUTING` events
 with no outcome. `engine.mismatched_runs()` lists gated runs whose hash differs from the proposal's, and
 tokens that ran more than once.
 

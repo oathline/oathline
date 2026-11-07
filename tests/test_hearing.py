@@ -180,5 +180,138 @@ class ShownTest(unittest.TestCase):
         self.assertEqual(eng.show("siya", with_items, TEXT, channel="spoken")["error"], "already_used")
 
 
+class HeardTest(unittest.TestCase):
+    def heard_token(self, eng, items=ITEMS, text=TEXT, capability="pay.send"):
+        token = eng.request("agent", capability, {"to": "bob@example.com"}, items=items)["token"]
+        self.assertTrue(eng.show("siya", token, text, channel="spoken")["ok"])
+        out = eng.hear("siya", token, channel="spoken")
+        self.assertEqual((out["ok"], out["state"]), (True, "heard"), out)
+        return token, out
+
+    def test_confirm_without_a_showing_is_unheard(self):
+        eng, ran = make()
+        token = eng.request("agent", "pay.send", {"to": "bob@example.com"}, items=ITEMS)["token"]
+        out = eng.confirm("alice", token)
+        self.assertEqual((out["ok"], out["error"]), (False, "unheard"))
+        self.assertEqual(ran, [])
+        self.assertEqual(events(eng, "CONFIRM_REFUSED")[-1]["payload"]["reason"], "unheard")
+        self.assertEqual(eng.tokens.get(token)["state"], "proposed")           # nothing spent
+
+    def test_shown_but_not_heard_is_unheard(self):
+        eng, ran = make()
+        token = eng.request("agent", "pay.send", {"to": "bob@example.com"}, items=ITEMS)["token"]
+        self.assertTrue(eng.show("siya", token, TEXT, channel="spoken")["ok"])
+        self.assertEqual(eng.confirm("alice", token)["error"], "unheard")
+        self.assertEqual(ran, [])
+
+    def test_hear_needs_a_showing_first(self):
+        eng, _ = make()
+        token = eng.request("agent", "pay.send", {"to": "bob@example.com"}, items=ITEMS)["token"]
+        out = eng.hear("siya", token, channel="spoken")
+        self.assertEqual(out["error"], "not_shown")
+        self.assertEqual(events(eng, "HEAR_REFUSED")[-1]["payload"]["reason"], "not_shown")
+        self.assertEqual(eng.hear("siya", token, channel="telepathy")["error"], "bad_channel")
+
+    def test_heard_then_confirmed_runs_once_and_records_the_hearing(self):
+        eng, ran = make()
+        token, heard = self.heard_token(eng)
+        h = events(eng, "HEARD")[-1]
+        shown = events(eng, "SHOWN")[-1]
+        self.assertEqual(h["payload"], {"token": token, "items_hash": heard["items_hash"], "text_sha256": sha_text(TEXT),
+                                        "channel": "spoken", "shown_seq": shown["seq"]})
+        self.assertEqual(heard["heard_seq"], h["seq"])
+        out = eng.confirm("alice", token)
+        self.assertEqual(out["state"], "executed", out)
+        self.assertEqual(len(ran), 1)
+        confirmed = events(eng, "CONFIRMED_BY_HUMAN")[-1]["payload"]
+        self.assertEqual((confirmed["items_hash"], confirmed["heard_seq"], confirmed["text_sha256"]),
+                         (heard["items_hash"], h["seq"], sha_text(TEXT)))
+        self.assertEqual(events(eng, "EXECUTING")[-1]["payload"]["items_hash"], heard["items_hash"])
+        self.assertEqual(eng.confirm("alice", token)["error"], "already_used")
+        self.assertEqual(eng.hear("siya", token, channel="spoken")["error"], "already_used")
+        self.assertTrue(eng.audit.verify()["ok"])
+
+    def test_a_second_showing_of_the_same_items_is_heard_as_the_latest(self):
+        eng, _ = make()
+        token, _ = self.heard_token(eng)
+        other = "Paying bob at example dot com two point four million now. Right?"
+        self.assertTrue(eng.show("siya", token, other, channel="spoken")["ok"])
+        self.assertTrue(eng.hear("siya", token, channel="spoken")["ok"])
+        self.assertTrue(eng.confirm("alice", token)["ok"])
+        self.assertEqual(events(eng, "CONFIRMED_BY_HUMAN")[-1]["payload"]["text_sha256"], sha_text(other))
+
+    def test_a_hearing_belongs_to_one_token(self):
+        eng, ran = make()
+        self.heard_token(eng)
+        twin = eng.request("agent", "pay.send", {"to": "bob@example.com"}, items=ITEMS)["token"]   # identical items
+        self.assertEqual(eng.confirm("alice", twin)["error"], "unheard")
+        self.assertEqual(len(ran), 0)
+
+    def test_an_agent_hearing_grants_nothing(self):
+        eng, ran = make()
+        token = eng.request("agent", "pay.send", {"to": "bob@example.com"}, items=ITEMS)["token"]
+        self.assertTrue(eng.show("agent", token, TEXT, channel="spoken")["ok"])
+        self.assertTrue(eng.hear("agent", token, channel="spoken")["ok"])
+        self.assertEqual(eng.confirm("agent", token)["error"], "non_human_principal")
+        self.assertEqual(ran, [])
+        self.assertEqual({e["principal"] for e in events(eng, "SHOWN") + events(eng, "HEARD")}, {"agent"})
+
+    def test_rewritten_items_and_hash_are_a_stale_hearing(self):
+        eng, ran = make()
+        token, _ = self.heard_token(eng)
+        new_items = [dict(ITEMS[0]), {"key": "amount", "value": 9900000, "said": "nine point nine million", "label": "Amount"}]
+        twin = eng.tokens.propose("agent", "pay.send", {"to": "bob@example.com"}, items=new_items)
+        rewritten = eng.tokens.get(twin)
+        eng.tokens._db.execute("UPDATE proposals SET items=(SELECT items FROM proposals WHERE id=?),"
+                               " items_hash=? WHERE id=?", (twin, rewritten["items_hash"], token))
+        eng.tokens._db.commit()
+        self.assertEqual(eng.confirm("alice", token)["error"], "stale_hearing")
+        self.assertEqual(ran, [])
+
+    def test_rewritten_items_alone_are_tampered(self):
+        eng, ran = make()
+        token, _ = self.heard_token(eng)
+        eng.tokens._db.execute("UPDATE proposals SET items=? WHERE id=?", ('[{"key": "to", "value": "mallory@example.com"}]', token))
+        eng.tokens._db.commit()
+        self.assertEqual(eng.confirm("alice", token)["error"], "tampered")
+        self.assertEqual(ran, [])
+
+    def test_a_showing_of_rewritten_items_is_stale(self):
+        eng, _ = make()
+        token = eng.request("agent", "pay.send", {"to": "bob@example.com"}, items=ITEMS)["token"]
+        self.assertTrue(eng.show("siya", token, TEXT, channel="spoken")["ok"])
+        new_items = [dict(ITEMS[0]), {"key": "amount", "value": 9900000, "said": "nine point nine million", "label": "Amount"}]
+        twin = eng.tokens.propose("agent", "pay.send", {"to": "bob@example.com"}, items=new_items)
+        eng.tokens._db.execute("UPDATE proposals SET items=(SELECT items FROM proposals WHERE id=?), items_hash=? WHERE id=?",
+                               (twin, eng.tokens.get(twin)["items_hash"], token))
+        eng.tokens._db.commit()
+        self.assertEqual(eng.hear("siya", token, channel="spoken")["error"], "stale_showing")
+
+    def test_why_says_the_last_word(self):
+        eng, _ = make()
+        token = eng.request("agent", "pay.send", {"to": "bob@example.com"}, items=ITEMS)["token"]
+        eng.confirm("alice", token)
+        self.assertIn("unheard", eng.why(token))
+        self.assertTrue(eng.show("siya", token, TEXT, channel="spoken")["ok"])
+        self.assertTrue(eng.hear("siya", token, channel="spoken")["ok"])
+        self.assertTrue(eng.confirm("alice", token)["ok"])
+        self.assertIn("executed", eng.why(token).lower())
+        self.assertEqual(eng.why("tok_" + "0" * 32), "no such token")
+
+    def test_unheard_runs_lists_a_run_that_had_no_hearing(self):
+        eng, _ = make()
+        token = eng.request("alice", "email.send", {"to": "bob@example.com"}, items=ITEMS)["token"]   # not a heard capability
+        self.assertTrue(eng.confirm("alice", token)["ok"])                                           # ran, as in 0.1.2
+        self.assertEqual(eng.unheard_runs(), [])
+        reg = Registry([gated("email.send", heard=True), gated("pay.send", heard=True)])
+        later = Engine(reg, audit=eng.audit, tokens=eng.tokens)                                       # the same log, the rule now on
+        later.register("pay.send", lambda a: {"paid": True})
+        listed = later.unheard_runs()
+        self.assertEqual([(r["token"], r["reason"]) for r in listed], [(token, "no_hearing")])
+        heard, _ = self.heard_token(later)
+        self.assertTrue(later.confirm("alice", heard)["ok"])
+        self.assertEqual([r["token"] for r in later.unheard_runs()], [token])                        # the heard run is not listed
+
+
 if __name__ == "__main__":
     unittest.main()

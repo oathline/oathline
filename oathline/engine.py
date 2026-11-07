@@ -499,6 +499,80 @@ class Engine:
             return {"ok": False, "state": "not_shown", "error": "audit_write_failed"}
         return {"ok": True, "state": "shown", "token": token, "items_hash": rec["items_hash"], "text_sha256": digest}
 
+    def _last(self, event_type: str, token: str) -> dict | None:
+        """The latest event of that type for this token, or None."""
+        last = None
+        for e in self._events():
+            if e["event_type"] == event_type and e["payload"].get("token") == token:
+                last = e
+        return last
+
+    def hear(self, principal: str, token: str, *, channel: str = "spoken") -> dict:
+        """The product says the human HAD the shown text (it was spoken to the end, the card was delivered). Refused
+        before any showing (`not_shown`) and when the proposal's items are no longer the ones that were shown
+        (`stale_showing`). Recorded as HEARD with the items hash and the shown text's SHA-256; one per showing."""
+        rec, refusal = self._pending(principal, token, "hear", "HEAR_REFUSED")
+        if refusal:
+            return refusal
+        if channel not in SHOW_CHANNELS:
+            return self._refuse_confirm(principal, token, "bad_channel", action="hear", event="HEAR_REFUSED")
+        shown = self._last("SHOWN", token)
+        if shown is None:
+            return self._refuse_confirm(principal, token, "not_shown", action="hear", event="HEAR_REFUSED")
+        if shown["payload"].get("items_hash") != rec["items_hash"]:
+            return self._refuse_confirm(principal, token, "stale_showing", action="hear", event="HEAR_REFUSED")
+        payload = {"token": token, "items_hash": rec["items_hash"], "text_sha256": shown["payload"].get("text_sha256"),
+                   "channel": channel, "shown_seq": shown["seq"]}
+        try:
+            seq = self.audit.append("HEARD", principal, rec["capability"], payload)["seq"]
+        except Exception:  # noqa: BLE001 - no record of the hearing, no hearing
+            return {"ok": False, "state": "not_heard", "error": "audit_write_failed"}
+        return {"ok": True, "state": "heard", "token": token, "items_hash": rec["items_hash"], "heard_seq": seq}
+
+    def why(self, token: object) -> str:
+        """One plain line for "why didn't it run": the last thing the log says about this token."""
+        if type(token) is not str or not TOKEN_SHAPE.fullmatch(token):
+            return "no such token"
+        events = self._events()
+        last = None
+        for e in events:
+            if e["payload"].get("token") == token:
+                last = e
+        if last is None:
+            return "no such token"
+        if last["event_type"] == "EXECUTING":
+            for e in events:
+                if e["payload"].get("executing_seq") == last["seq"] and e["event_type"] in ("EXECUTED", "EXECUTE_FAILED"):
+                    return e["event_type"].lower().replace("_", " ")
+            return "executing: started, outcome not recorded"
+        words = last["event_type"].lower().replace("_", " ")
+        reason = last["payload"].get("reason")
+        return f"{words}: {reason}" if reason else words
+
+    def unheard_runs(self) -> list[dict]:
+        """Runs of a capability that is declared heard NOW with no HEARD for their token before them, or a HEARD of
+        other items than the ones that ran. Empty when the rule held; a run from before the capability was declared
+        heard shows up here. Reads the whole log, like mismatched_runs()."""
+        heard: dict[str, list] = {}
+        out = []
+        for e in self._events():
+            p = e["payload"]
+            token = p.get("token")
+            if type(token) is not str:
+                continue
+            if e["event_type"] == "HEARD":
+                heard.setdefault(token, []).append((e["seq"], p.get("items_hash")))
+            elif e["event_type"] == "EXECUTING":
+                cap = self.registry.get(e["action"])
+                if cap is None or not cap.heard:
+                    continue
+                hashes = [h for seq, h in heard.get(token, []) if seq < e["seq"]]
+                if not hashes:
+                    out.append({"token": token, "capability": e["action"], "reason": "no_hearing"})
+                elif p.get("items_hash") not in hashes:
+                    out.append({"token": token, "capability": e["action"], "reason": "hearing_differs"})
+        return out
+
     def _human_may_confirm(self, human: str, proposer: str, capability: str) -> str | None:
         if not self._is_agent(proposer):
             return "wrong_principal"            # a human's own proposal is confirmed by that human only
@@ -578,6 +652,17 @@ class Engine:
         rec = self._store(self.tokens.get, token)
         if rec is not None and not rec["readable"]:
             return self._refuse_confirm(principal, token, "corrupt_stored_row")   # a stored row no engine wrote
+        hearing = {"items_hash": rec["items_hash"]} if rec is not None and rec["items_hash"] else {}
+        cap = self.registry.get(rec["capability"]) if rec is not None else None
+        if cap is not None and cap.heard:                 # the hearing rule (0.2.0): shown, heard, yes to exactly that
+            if rec["items"] is None:
+                return self._refuse_confirm(principal, token, "items_required")
+            heard = self._last("HEARD", token)
+            if heard is None:
+                return self._refuse_confirm(principal, token, "unheard")
+            if heard["payload"].get("items_hash") != rec["items_hash"]:
+                return self._refuse_confirm(principal, token, "stale_hearing")
+            hearing.update(heard_seq=heard["seq"], text_sha256=heard["payload"].get("text_sha256"))
         approved = None
         if self.approver_check is not None:
             approved = None if rec is None else {"token": rec["id"], "capability": rec["capability"],
@@ -593,27 +678,27 @@ class Engine:
             if approved is not None and conf.integrity != approved["arguments_hash"]:
                 return self._refuse_confirm(principal, token, "changed_after_approval", conf.capability)
             if not self._append("CONFIRMED_BY_HUMAN", principal, conf.capability,
-                                {"token": token, "proposer": conf.proposer}):
+                                {"token": token, "proposer": conf.proposer, **hearing}):
                 return self._give_back(token, principal)   # no record of the confirmation: nothing runs, token back
             try:                                     # the agent must still hold the grant it proposed under
                 self.registry.authorize(conf.proposer, conf.capability)
             except Denied as e:
                 return self._denied(conf.proposer, conf.capability, str(e), confirmed_by=principal)
             return self._execute(conf.proposer, conf.capability, conf.arguments or {}, confirmed_by=principal,
-                                 token=token, arguments_hash=conf.integrity)
+                                 token=token, arguments_hash=conf.integrity, items_hash=hearing.get("items_hash", ""))
         conf = self._store(self.tokens.confirm, principal, token)
         if not conf.ok:
             return self._refuse_confirm(principal, token, conf.error)
         if approved is not None and conf.integrity != approved["arguments_hash"]:
             return self._refuse_confirm(principal, token, "changed_after_approval", conf.capability)
-        if not self._append("CONFIRMED", principal, conf.capability, {"token": token}):
+        if not self._append("CONFIRMED", principal, conf.capability, {"token": token, **hearing}):
             return self._give_back(token, principal)       # no record of the confirmation: nothing runs, token back
         try:
             self.registry.authorize(principal, conf.capability)      # re-check on the STORED capability
         except Denied as e:
             return self._denied(principal, conf.capability, str(e))
         return self._execute(principal, conf.capability, conf.arguments or {}, token=token,
-                             arguments_hash=conf.integrity)
+                             arguments_hash=conf.integrity, items_hash=hearing.get("items_hash", ""))
 
     # ------------------------------------------------------------------
     def unfinished(self) -> list[dict]:
@@ -659,7 +744,7 @@ class Engine:
         return False
 
     def _execute(self, principal: str, capability: str, arguments: dict, *, confirmed_by: str = "",
-                 token: str = "", arguments_hash: str = "") -> dict:
+                 token: str = "", arguments_hash: str = "", items_hash: str = "") -> dict:
         fn = self._executors.get(capability)
         if fn is None:
             out = {"ok": False, "error": "no_executor"}
@@ -668,6 +753,8 @@ class Engine:
             return out
         by = {"confirmed_by": confirmed_by} if confirmed_by else {}
         what = {"token": token, "arguments_hash": arguments_hash} if token else {}
+        if token and items_hash:
+            what["items_hash"] = items_hash              # 0.2.0: the run names the items it was heard for
         unrecorded = {"ok": False, "state": "ran_unrecorded", "error": "ran_but_not_recorded"}
         try:                                         # no record, no run
             seq = self.audit.append("EXECUTING", principal, capability, {**by, **what})["seq"]
