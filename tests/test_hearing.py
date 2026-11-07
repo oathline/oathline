@@ -513,6 +513,48 @@ class RendererTest(unittest.TestCase):
         self.assertTrue(eng.show("siya", new, "I'll pay bob at example dot com two point five million. Right?", channel="spoken")["ok"])
 
 
+class HandWrittenHearingTest(unittest.TestCase):
+    """A HEARD or SHOWN that was not written by a registered product actor is not a hearing or a showing, whoever
+    wrote it into the log (the agent's review, 22:04: 'a HEARD written by the model actor is not a hearing')."""
+
+    def crafted(self, eng, token, event_type, extra=None):
+        rec = eng.tokens.get(token)
+        payload = {"token": token, "items_hash": rec["items_hash"], "text_sha256": sha_text(TEXT), "channel": "spoken",
+                   "chars": len(TEXT), **(extra or {})}
+        return payload
+
+    def test_a_heard_written_by_the_model_actor_is_not_a_hearing(self):
+        eng, ran = make()
+        token = eng.request("agent", "pay.send", {"to": "bob@example.com"}, items=ITEMS)["token"]
+        self.assertTrue(eng.show("siya", token, TEXT, channel="spoken")["ok"])
+        shown_seq = events(eng, "SHOWN")[-1]["seq"]
+        for who in ("model", "mallory", "alice", "agent"):
+            with self.subTest(who=who):
+                eng.audit.append("HEARD", who, "pay.send", self.crafted(eng, token, "HEARD", {"shown_seq": shown_seq}))
+                self.assertEqual(eng.confirm("alice", token)["error"], "unheard")
+        self.assertEqual(ran, [])
+        self.assertTrue(eng.hear("siya", token, channel="spoken")["ok"])      # the product's own hearing
+        self.assertTrue(eng.confirm("alice", token)["ok"])
+        self.assertEqual(len(ran), 1)
+
+    def test_a_shown_written_by_hand_is_not_a_showing(self):
+        eng, _ = make()
+        token = eng.request("agent", "pay.send", {"to": "bob@example.com"}, items=ITEMS)["token"]
+        for who in ("model", "mallory"):
+            eng.audit.append("SHOWN", who, "pay.send", self.crafted(eng, token, "SHOWN"))
+        self.assertEqual(eng.hear("siya", token, channel="spoken")["error"], "not_shown")
+        self.assertTrue(eng.show("siya", token, TEXT, channel="spoken")["ok"])
+        self.assertTrue(eng.hear("siya", token, channel="spoken")["ok"])
+
+    def test_unheard_runs_counts_only_a_product_hearing(self):
+        eng, _ = make()
+        token = eng.request("alice", "email.send", {"to": "bob@example.com"}, items=ITEMS)["token"]   # not heard: runs as 0.1.2
+        eng.audit.append("HEARD", "model", "email.send", self.crafted(eng, token, "HEARD"))        # a forged hearing before the run
+        self.assertTrue(eng.confirm("alice", token)["ok"])
+        later = Engine(Registry([gated("email.send", heard=True, products=frozenset({"siya"}))]), audit=eng.audit, tokens=eng.tokens)
+        self.assertEqual([r["reason"] for r in later.unheard_runs()], ["no_hearing"])
+
+
 class Clock:
     def __init__(self):
         self.t = 1_000_000.0

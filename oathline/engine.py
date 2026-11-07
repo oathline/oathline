@@ -552,11 +552,13 @@ class Engine:
             return {"ok": False, "state": "not_shown", "error": "audit_write_failed"}
         return {"ok": True, "state": "shown", "token": token, "items_hash": rec["items_hash"], "text_sha256": digest}
 
-    def _last(self, event_type: str, token: str) -> dict | None:
-        """The latest event of that type for this token, or None."""
+    def _last(self, event_type: str, token: str, products: frozenset | None = None) -> dict | None:
+        """The latest event of that type for this token, or None. With `products`, only an event a registered product
+        actor wrote counts: a SHOWN or HEARD put into the log under another name is not a showing or a hearing."""
         last = None
         for e in self._events():
-            if e["event_type"] == event_type and e["payload"].get("token") == token:
+            if e["event_type"] == event_type and e["payload"].get("token") == token \
+                    and (products is None or (e["principal"] in products and not is_non_human(e["principal"], DEFAULT_NON_HUMAN))):
                 last = e
         return last
 
@@ -569,7 +571,7 @@ class Engine:
             return refusal
         if channel not in SHOW_CHANNELS:
             return self._refuse_confirm(principal, token, "bad_channel", action="hear", event="HEAR_REFUSED")
-        shown = self._last("SHOWN", token)
+        shown = self._last("SHOWN", token, self.registry.get(rec["capability"]).products)
         if shown is None:
             return self._refuse_confirm(principal, token, "not_shown", action="hear", event="HEAR_REFUSED")
         if shown["payload"].get("items_hash") != rec["items_hash"]:
@@ -669,6 +671,9 @@ class Engine:
             if type(token) is not str:
                 continue
             if e["event_type"] == "HEARD":
+                cap = self.registry.get(e["action"])
+                if cap is None or e["principal"] not in cap.products or is_non_human(e["principal"], DEFAULT_NON_HUMAN):
+                    continue                             # not a product's hearing: it counts for nothing
                 heard.setdefault(token, []).append((e["seq"], p.get("items_hash")))
             elif e["event_type"] == "EXECUTING":
                 cap = self.registry.get(e["action"])
@@ -767,7 +772,7 @@ class Engine:
         if cap is not None and cap.heard:                 # the hearing rule (0.2.0): shown, heard, yes to exactly that
             if rec["items"] is None:
                 return self._refuse_confirm(principal, token, "items_required")
-            heard = self._last("HEARD", token)
+            heard = self._last("HEARD", token, cap.products)   # a hearing is the product's; one written by anyone else is none
             if heard is None:
                 return self._refuse_confirm(principal, token, "unheard")
             if heard["payload"].get("items_hash") != rec["items_hash"]:
