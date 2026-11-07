@@ -27,7 +27,7 @@ class ItemsInTheStoreTest(unittest.TestCase):
         t = self.s.propose("agent", "pay.send", {"to": "bob@example.com"}, items=ITEMS)
         rec = self.s.get(t)
         self.assertEqual(rec["items"], ITEMS)
-        self.assertEqual(rec["items_hash"], canonical_hash([["to", "bob@example.com"], ["amount", 2400000]]))
+        self.assertEqual(rec["items_hash"], canonical_hash([["to", "bob@example.com", "", "spoken"], ["amount", 2400000, "", "spoken"]]))
         self.assertTrue(rec["readable"])
 
     def test_a_proposal_without_items_has_none(self):
@@ -86,6 +86,31 @@ class ItemsInTheStoreTest(unittest.TestCase):
         self.assertIsNone(self.s.revise(t, ITEMS, principal="mallory"))        # another principal's proposal
         self.assertTrue(self.s.confirm("agent", t).ok)
         self.assertIsNone(self.s.revise(t, ITEMS, principal="agent"))          # used
+
+
+class HowAnItemIsShownIsInTheHashTest(unittest.TestCase):
+    """Claude 22:05, hole 2: the same key and value shown another way (on a screen, as a list, as a preset) is another
+    proposal: the items hash covers kind and shown_as, and a rewritten showing is tampered."""
+
+    def setUp(self):
+        self.s = TokenStore(ttl_seconds=300)
+
+    def hash_of(self, item):
+        return self.s.get(self.s.propose("agent", "pay.send", {}, items=[item]))["items_hash"]
+
+    def test_the_hash_covers_kind_and_shown_as(self):
+        plain = {"key": "body", "value": "Dear Bob"}
+        variants = [dict(plain, shown_as="screen"), dict(plain, shown_as="preset"), dict(plain, shown_as="kept"),
+                    dict(plain, kind="list"), dict(plain, kind="list", shown_as="screen")]
+        hashes = [self.hash_of(plain)] + [self.hash_of(v) for v in variants]
+        self.assertEqual(len(set(hashes)), len(hashes), hashes)
+        self.assertEqual(self.hash_of(plain), self.hash_of(dict(plain, shown_as="spoken")))   # spoken is the default
+        self.assertEqual(self.hash_of(plain), self.hash_of(dict(plain, label="Body")))       # a label is words, not a showing
+
+    def test_a_rewritten_showing_is_tampered(self):
+        t = self.s.propose("agent", "pay.send", {}, items=[{"key": "body", "value": "Dear Bob", "shown_as": "screen"}])
+        self.s._db.execute("UPDATE proposals SET items=? WHERE id=?", (json.dumps([{"key": "body", "value": "Dear Bob"}]), t))
+        self.assertEqual(self.s.confirm("agent", t).error, "tampered")
 
 
 class StoreFrom012Test(unittest.TestCase):
