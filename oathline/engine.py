@@ -464,7 +464,11 @@ class Engine:
             return None, self._refuse_confirm(principal, token, "corrupt_stored_row", action, event=event)
         if rec["state"] in ("used", "running"):
             return None, self._refuse_confirm(principal, token, "already_used", action, event=event)
-        if rec["state"] == "expired":
+        try:
+            dead = rec["state"] == "expired" or self._store(self.tokens.expire_if_due, token)
+        except _StoreUnavailable:
+            return None, self._refuse_confirm(principal, token, "token_store_unavailable", action, event=event)
+        if dead:                                        # a timed-out proposal is dead: nothing shows, hears or revises it
             return None, self._refuse_confirm(principal, token, "expired", action, event=event)
         if rec["items"] is None:
             return None, self._refuse_confirm(principal, token, "items_required", action, event=event)
@@ -706,6 +710,8 @@ class Engine:
         rec = self._store(self.tokens.get, token)
         if rec is not None and not rec["readable"]:
             return self._refuse_confirm(principal, token, "corrupt_stored_row")   # a stored row no engine wrote
+        if rec is not None and (rec["state"] == "expired" or self._store(self.tokens.expire_if_due, token)):
+            return self._refuse_confirm(principal, token, "expired")   # a timed-out proposal is dead, whatever else it lacks
         hearing = {"items_hash": rec["items_hash"]} if rec is not None and rec["items_hash"] else {}
         cap = self.registry.get(rec["capability"]) if rec is not None else None
         if cap is not None and cap.heard:                 # the hearing rule (0.2.0): shown, heard, yes to exactly that

@@ -327,6 +327,24 @@ class TokenStore:
                          confirmer=confirmer or p_principal, integrity=integrity, items=items,
                          items_hash=items_hash_now or "")
 
+    def expire_if_due(self, token: str) -> bool:
+        """0.2.0: a `proposed` row past its lifetime is marked expired now, so that a showing, a hearing or a
+        correction cannot touch a dead proposal. True when the row is expired, then or now."""
+        if type(token) is not str:
+            return False
+        r = self._db.execute("SELECT state, expires FROM proposals WHERE id=?", (token,)).fetchone()
+        if not r:
+            return False
+        state, expires = r
+        if state == "expired":
+            return True
+        now = self._now()
+        if state == "proposed" and now is not None and type(expires) in (int, float) and now > expires:
+            self._db.execute("UPDATE proposals SET state='expired' WHERE id=? AND state='proposed'", (token,))
+            self._db.commit()
+            return True
+        return False
+
     def mark_running(self, token: str, confirmer: str) -> bool:
         """The action is about to start: the row goes from `used` to `running`, only for the confirmer that used
         it. From `running` there is no way back: release() refuses it, and a confirm is `already_used`."""

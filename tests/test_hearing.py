@@ -4,7 +4,7 @@ step is on the record. A capability that does not declare it behaves exactly as 
 import hashlib
 import unittest
 
-from oathline import Capability, Engine, Registry
+from oathline import Capability, Engine, Registry, TokenStore
 
 
 def gated(name="email.send", **kw):
@@ -380,6 +380,50 @@ class CorrectTest(unittest.TestCase):
         self.assertEqual(eng.correct("siya", "tok_" + "0" * 32, "amount", 1)["error"], "unknown_token")
         plain = eng.request("alice", "email.send", {"to": "bob@example.com"})["token"]
         self.assertEqual(eng.correct("siya", plain, "to", "x")["error"], "items_required")
+
+
+class Clock:
+    def __init__(self):
+        self.t = 1_000_000.0
+
+    def __call__(self):
+        return self.t
+
+
+class DeadProposalTest(unittest.TestCase):
+    """A proposal past its lifetime is dead: it can be neither shown, heard, corrected nor confirmed (Claude 22:05, hole 4)."""
+
+    def timed(self):
+        clock = Clock()
+        eng, ran = make(tokens=TokenStore(ttl_seconds=60, clock=clock))
+        token = eng.request("agent", "pay.send", {"to": "bob@example.com"}, items=ITEMS)["token"]
+        return eng, ran, clock, token
+
+    def test_a_timed_out_proposal_is_dead(self):
+        eng, ran, clock, token = self.timed()
+        clock.t += 61
+        self.assertEqual(eng.show("siya", token, TEXT, channel="spoken")["error"], "expired")
+        self.assertEqual(eng.tokens.get(token)["state"], "expired")                              # marked, not just refused
+        self.assertEqual(eng.hear("siya", token, channel="spoken")["error"], "expired")
+        self.assertEqual(eng.correct("siya", token, "amount", 1)["error"], "expired")
+        self.assertEqual(eng.confirm("alice", token)["error"], "expired")
+        self.assertEqual(ran, [])
+        self.assertEqual(events(eng, "SHOWN") + events(eng, "HEARD") + events(eng, "WITHDRAWN"), [])
+        self.assertEqual([e["payload"]["reason"] for e in events(eng, "SHOW_REFUSED")], ["expired"])
+
+    def test_a_hearing_dies_with_its_proposal(self):
+        eng, ran, clock, token = self.timed()
+        self.assertTrue(eng.show("siya", token, TEXT, channel="spoken")["ok"])
+        clock.t += 61
+        self.assertEqual(eng.hear("siya", token, channel="spoken")["error"], "expired")
+        eng2, ran2, clock2, token2 = self.timed()
+        self.assertTrue(eng2.show("siya", token2, TEXT, channel="spoken")["ok"])
+        self.assertTrue(eng2.hear("siya", token2, channel="spoken")["ok"])
+        clock2.t += 61
+        self.assertEqual(eng2.confirm("alice", token2)["error"], "expired")                     # heard in time, confirmed too late
+        self.assertEqual(ran2, [])
+        fresh = eng2.request("agent", "pay.send", {"to": "bob@example.com"}, items=ITEMS)["token"]
+        self.assertEqual(eng2.confirm("alice", fresh)["error"], "unheard")                      # the old hearing is not the new token's
 
 
 if __name__ == "__main__":
