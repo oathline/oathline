@@ -100,6 +100,10 @@ class Capability:
     # Argument names `validate()` may keep for this capability, so a model cannot slip in an undeclared one.
     # `validate(allowed_arguments=...)` adds to these. A mistake here is a TypeError when the capability is built.
     arguments: frozenset[str] = frozenset()
+    # The hearing rule (0.2.0). True: a gated capability that runs only after the human was shown exactly what will
+    # be written (`Engine.show`), had it (`Engine.hear`) and confirmed the items as they stand at that moment.
+    # False (the default): the capability behaves exactly as in 0.1.2 and meets none of the hearing refusals.
+    heard: bool = False
 
     def __post_init__(self):
         # the name sets are copied into frozensets, so the caller's own set cannot widen a grant later
@@ -136,6 +140,11 @@ class Registry:
             if c.writes and not c.needs_confirmation:
                 # writes are always confirmed; make that explicit, not implied
                 raise ValueError(f"{c.name}: a writing capability must set needs_confirmation=True")
+            if c.heard is not True and c.heard is not False:
+                raise TypeError(f"{c.name}: heard must be True or False, not {type(c.heard).__name__}")
+            if c.heard and not c.gated:
+                # a hearing guards a write or a confirmed action; a read has nothing to be heard
+                raise ValueError(f"{c.name}: heard=True needs a gated capability (writes or needs_confirmation)")
             caps[c.name] = c
         self._caps: Mapping[str, Capability] = MappingProxyType(caps)
 
