@@ -14,9 +14,9 @@ def registry(heard=True):
 
 
 CORPUS = [
-    # (name, items, scripted corrections before the yes: [(key, value, said)])
+    # (name, items, scripted corrections before the yes: [(key, value)])
     ("diary", [{"key": "weather", "value": "fine and sunny", "label": "Weather"},
-               {"key": "hours", "value": 8, "shown_as": "preset", "label": "Hours worked", "said": "8, the form's own"},
+               {"key": "hours", "value": 8, "shown_as": "preset", "label": "Hours worked"},
                {"key": "notes", "value": "slab poured on lot 2", "label": "Notes"}], []),
     ("toolbox", [{"key": "topic", "value": "ladders", "label": "Topic"},
                  {"key": "attendance", "value": ["Kerry Walsh", "Tom Nguyen"], "kind": "list", "label": "Ticked"}], []),
@@ -24,20 +24,29 @@ CORPUS = [
                           {"key": "attendance", "value": ["Kerry Walsh", "Tom Nguyen", "Sarah Mitchell"], "kind": "list",
                            "label": "Ticked", "whole_word": "everyone"}], []),
     ("incident", [{"key": "type", "value": "Near miss", "label": "Incident type"},
-                  {"key": "lostTime", "value": False, "label": "Lost-time injury", "said": "no"}], []),
+                  {"key": "lostTime", "value": False, "label": "Lost-time injury"}], []),
     ("project", [{"key": "name", "value": "Harbour View Townhouses", "label": "Project name"},
-                 {"key": "value", "value": 2800000, "label": "Contract value", "said": "two point eight million"}], []),
-    ("email", [{"key": "to", "value": "bob@example.com", "label": "To", "said": "bob at example dot com"},
+                 {"key": "value", "value": 2800000, "label": "Contract value"}], []),
+    ("email", [{"key": "to", "value": "bob@example.com", "label": "To"},
                {"key": "body", "value": "Dear Bob, " * 30, "shown_as": "screen", "label": "the email"}], []),
     ("corrected", [{"key": "weather", "value": "overcast", "label": "Weather"},
-                   {"key": "hours", "value": 7, "label": "Hours worked"}], [("weather", "fine", "fine")]),
+                   {"key": "hours", "value": 7, "label": "Hours worked"}], [("weather", "fine")]),
     ("kept", [{"key": "swms", "value": "SWMS-0417", "shown_as": "kept", "label": "the SWMS from the library"},
               {"key": "signer", "value": "Mick Tran", "label": "Signed by"}], []),
 ]
 
 
+def words(key, value):
+    """How this product says its values; Core renders them at the proposal (the proposer never passes `said`)."""
+    if key == "lostTime":
+        return "no" if value is False else "yes"
+    if isinstance(value, list):
+        return " and ".join(str(v) for v in value)
+    return {("to", "bob@example.com"): "bob at example dot com", ("value", 2800000): "two point eight million"}.get((key, value), str(value))
+
+
 def read_back(items):
-    """What the product says: every item in words, lists element by element or by their whole word."""
+    """What the product says: every item in words (Core's `said`), lists element by element or by their whole word."""
     bits = []
     for it in items:
         label = it.get("label") or it["key"]
@@ -60,8 +69,9 @@ class Product:
 
     def run(self, name, items, corrections):
         token = self.eng.request("agent", "form.save", {"form": name}, items=items)["token"]
-        for key, value, said in corrections:                                      # the human corrects before the yes
-            out = self.eng.correct("siya", token, key, value, said=said)
+        items = self.eng.tokens.get(token)["items"]                                # as stored: with Core's words
+        for key, value in corrections:                                            # the human corrects before the yes
+            out = self.eng.correct("siya", token, key, value)
             assert out["ok"], out
             token = out["token"]
             items = self.eng.tokens.get(token)["items"]
@@ -119,6 +129,7 @@ class ConformanceTest(unittest.TestCase):
     def engine(self, heard=True):
         eng = Engine(registry(heard), record_shown_text=True)
         eng.register("form.save", lambda a: {"saved": a["form"]})
+        eng.register_renderer("form.save", words)
         return eng
 
     def test_a_product_that_shows_hears_and_confirms_leaves_no_holes(self):

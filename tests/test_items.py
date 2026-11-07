@@ -27,7 +27,8 @@ class ItemsInTheStoreTest(unittest.TestCase):
         t = self.s.propose("agent", "pay.send", {"to": "bob@example.com"}, items=ITEMS)
         rec = self.s.get(t)
         self.assertEqual(rec["items"], ITEMS)
-        self.assertEqual(rec["items_hash"], canonical_hash([["to", "bob@example.com", "", "spoken"], ["amount", 2400000, "", "spoken"]]))
+        self.assertEqual(rec["items_hash"], canonical_hash([["to", "bob@example.com", "bob at example dot com", "", "spoken"],
+                                                            ["amount", 2400000, "two point four million", "", "spoken"]]))
         self.assertTrue(rec["readable"])
 
     def test_a_proposal_without_items_has_none(self):

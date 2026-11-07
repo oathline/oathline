@@ -14,9 +14,18 @@ from oathline import AuditLog, Capability, Engine, Registry, TokenStore
 from oathline import audit as audit_module
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-ITEMS = [{"key": "to", "value": "bob@example.com", "said": "bob at example dot com", "label": "To"},
-         {"key": "amount", "value": 2400000, "said": "two point four million", "label": "Amount"}]
+ITEMS = [{"key": "to", "value": "bob@example.com", "label": "To"}, {"key": "amount", "value": 2400000, "label": "Amount"}]
 TEXT = "I'll pay bob at example dot com two point four million. Right?"
+WORDS = {("to", "bob@example.com"): "bob at example dot com", ("amount", 2400000): "two point four million",
+         ("amount", 2500000): "two point five million", ("amount", 2600000): "two point six million",
+         ("amount", 9900000): "nine point nine million"}
+
+
+def words(key, value):
+    """The test renderer: how this product says its values (Core renders; the proposer never passes `said`)."""
+    if isinstance(value, list):
+        return " and ".join(str(v) for v in value)
+    return WORDS.get((key, value), str(value))
 
 
 def registry():
@@ -34,6 +43,7 @@ def engine(folder, effects=None):
         return {"paid": True}
 
     eng.register("pay.send", pay)
+    eng.register_renderer("pay.send", words)
     return eng
 
 
@@ -81,7 +91,7 @@ class LockedLogTest(unittest.TestCase):
         self.assertEqual(self.eng.confirm("alice", token)["error"], "unheard")                   # nothing was heard
         self.assertTrue(self.eng.hear("siya", token, channel="spoken")["ok"])
         self.hold_lock()
-        out = self.eng.correct("siya", token, "amount", 2500000, said="two point five million")
+        out = self.eng.correct("siya", token, "amount", 2500000)
         self.assertEqual((out["ok"], out["error"]), (False, "audit_write_failed"))
         self.release_lock()
         self.assertEqual(self.eng.tokens.get(token)["state"], "proposed")                        # the old one stands
@@ -146,6 +156,7 @@ class FuzzTheHearingTest(unittest.TestCase):
         eng = Engine(registry())
         runs = []
         eng.register("pay.send", lambda a: runs.append(dict(a)) or {"paid": True})
+        eng.register_renderer("pay.send", words)
         tokens = []
         for i in range(self.SHAPES):
             move = rng.randrange(6)
@@ -164,8 +175,7 @@ class FuzzTheHearingTest(unittest.TestCase):
                 elif move == 2:
                     eng.hear(product, tok, channel=channel)
                 elif move == 3:
-                    out = eng.correct(product, tok, rng.choice(["amount", "to", "colour", "", None]), rng.choice(self.VALUES),
-                                      said=rng.choice(["two point five million", None, ""]))
+                    out = eng.correct(product, tok, rng.choice(["amount", "to", "colour", "", None]), rng.choice(self.VALUES))
                     if out.get("ok"):
                         tokens.append(out["token"])
                 else:
@@ -214,7 +224,7 @@ class CorrectionRacesConfirmationTest(unittest.TestCase):
                 def correct():
                     eng = engine(folder, effects)
                     go.wait()
-                    results.append(("correct", eng.correct("siya", token, "amount", 2500000, said="two point five million")))
+                    results.append(("correct", eng.correct("siya", token, "amount", 2500000)))
                     eng.close()
 
                 threads = [threading.Thread(target=confirm) for _ in range(12)] + [threading.Thread(target=correct)]

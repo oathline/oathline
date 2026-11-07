@@ -11,9 +11,18 @@ def gated(name="email.send", **kw):
     return Capability(name, frozenset({"agent", "alice"}), writes=True, needs_confirmation=True, **kw)
 
 
-ITEMS = [{"key": "to", "value": "bob@example.com", "said": "bob at example dot com", "label": "To"},
-         {"key": "amount", "value": 2400000, "said": "two point four million", "label": "Amount"}]
+ITEMS = [{"key": "to", "value": "bob@example.com", "label": "To"}, {"key": "amount", "value": 2400000, "label": "Amount"}]
 TEXT = "I'll pay bob at example dot com two point four million. Right?"
+WORDS = {("to", "bob@example.com"): "bob at example dot com", ("amount", 2400000): "two point four million",
+         ("amount", 2500000): "two point five million", ("amount", 2600000): "two point six million",
+         ("amount", 9900000): "nine point nine million"}
+
+
+def words(key, value):
+    """The test renderer: how this product says its values (Core renders; the proposer never passes `said`)."""
+    if isinstance(value, list):
+        return " and ".join(str(v) for v in value)
+    return WORDS.get((key, value), str(value))
 
 
 def make(**engine_kw):
@@ -25,6 +34,8 @@ def make(**engine_kw):
     eng.register("pay.send", lambda a: ran.append(("pay.send", a)) or {"paid": a.get("to")})
     eng.register("email.send", lambda a: ran.append(("email.send", a)) or {"sent_to": a.get("to")})
     eng.register("notes.read", lambda a: {"notes": []})
+    eng.register_renderer("pay.send", words)
+    eng.register_renderer("email.send", words)
     return eng, ran
 
 
@@ -105,7 +116,7 @@ class ShownTest(unittest.TestCase):
         token = self.proposal(eng)
         self.assertTrue(eng.show("siya", token, TEXT, channel="spoken")["ok"])
         self.assertEqual(events(eng, "SHOWN")[0]["payload"]["text"], TEXT)
-        long_items = [{"key": "notes", "value": "slab poured", "said": "slab poured"}]
+        long_items = [{"key": "notes", "value": "slab poured"}]
         token2 = self.proposal(eng, items=long_items)
         long_text = "slab poured. " + "and more words " * 400 + "Right?"
         self.assertGreater(len(long_text), 4096)
@@ -122,10 +133,10 @@ class ShownTest(unittest.TestCase):
         self.assertEqual((out["ok"], out["error"], out["key"]), (False, "item_not_in_text", "amount"))
         self.assertEqual(events(eng, "SHOWN"), [])
         self.assertEqual(events(eng, "SHOW_REFUSED")[-1]["payload"]["reason"], "item_not_in_text")
-        bare = [{"key": "to", "value": "bob@example.com"}]                 # no said: the value itself must be in the text
+        bare = [{"key": "ref", "value": "INV-7"}]                            # no renderer words for it: the value itself must be in the text
         token2 = self.proposal(eng, items=bare)
-        self.assertEqual(eng.show("siya", token2, "I'll pay bob. Right?", channel="spoken")["error"], "item_not_in_text")
-        self.assertTrue(eng.show("siya", token2, "I'll pay bob@example.com. Right?", channel="spoken")["ok"])
+        self.assertEqual(eng.show("siya", token2, "I'll pay the invoice. Right?", channel="spoken")["error"], "item_not_in_text")
+        self.assertTrue(eng.show("siya", token2, "I'll pay INV-7. Right?", channel="spoken")["ok"])
 
     def test_a_mark_not_named_is_not_shown(self):
         eng, _ = make()
@@ -308,6 +319,7 @@ class HeardTest(unittest.TestCase):
         reg = Registry([gated("email.send", heard=True, products=frozenset({"siya"})), gated("pay.send", heard=True, products=frozenset({"siya"}))])
         later = Engine(reg, audit=eng.audit, tokens=eng.tokens)                                       # the same log, the rule now on
         later.register("pay.send", lambda a: {"paid": True})
+        later.register_renderer("pay.send", words)
         listed = later.unheard_runs()
         self.assertEqual([(r["token"], r["reason"]) for r in listed], [(token, "no_hearing")])
         heard, _ = self.heard_token(later)
@@ -325,7 +337,7 @@ class CorrectTest(unittest.TestCase):
     def test_a_correction_is_a_new_token_and_the_old_one_is_withdrawn(self):
         eng, ran = make()
         old = self.heard(eng)
-        out = eng.correct("siya", old, "amount", 2500000, said="two point five million")
+        out = eng.correct("siya", old, "amount", 2500000)
         self.assertEqual((out["ok"], out["state"]), (True, "proposed"), out)
         new = out["token"]
         self.assertNotEqual(new, old)
@@ -350,14 +362,14 @@ class CorrectTest(unittest.TestCase):
     def test_a_correction_keeps_the_other_items_and_the_arguments(self):
         eng, _ = make()
         old = self.heard(eng)
-        new = eng.correct("siya", old, "amount", 2500000, said="two point five million")["token"]
+        new = eng.correct("siya", old, "amount", 2500000)["token"]
         o, n = eng.tokens.get(old), eng.tokens.get(new)
         self.assertEqual((n["principal"], n["capability"], n["arguments"], n["integrity"]),
                          (o["principal"], o["capability"], o["arguments"], o["integrity"]))
-        self.assertEqual(n["items"][0], ITEMS[0])
+        self.assertEqual(n["items"][0], dict(ITEMS[0], said="bob at example dot com"))
         self.assertEqual(n["items"][1], {"key": "amount", "value": 2500000, "said": "two point five million", "label": "Amount"})
-        again = eng.correct("siya", new, "amount", 2600000)["token"]                     # no said given: the old said is dropped
-        self.assertNotIn("said", eng.tokens.get(again)["items"][1])
+        again = eng.correct("siya", new, "amount", 2600000)["token"]                     # the words are rendered again by Core
+        self.assertEqual(eng.tokens.get(again)["items"][1]["said"], "two point six million")
 
     def test_a_correction_needs_a_known_item_and_a_storable_value(self):
         eng, _ = make()
@@ -421,9 +433,84 @@ class ProductActorTest(unittest.TestCase):
         eng = Engine(reg)
         eng.register("pay.send", lambda a: {})
         eng.register("post.publish", lambda a: {})
+        eng.register_renderer("post.publish", words)
         token = eng.request("agent", "post.publish", {"to": "bob@example.com"}, items=ITEMS)["token"]
         self.assertEqual(eng.show("siya", token, TEXT, channel="spoken")["error"], "not_the_product")
         self.assertTrue(eng.show("press-desk", token, TEXT, channel="spoken")["ok"])
+
+
+class RendererTest(unittest.TestCase):
+    """Core renders each item's words itself (Claude 22:05, hole 1): the proposer cannot pass `said`, the hearing
+    shows Core's rendering, and the words are in the items hash."""
+
+    def test_the_proposer_cannot_pass_said(self):
+        eng, ran = make()
+        sneaky = [{"key": "amount", "value": 2400000, "said": "twenty four thousand"}]          # the words lie about the value
+        for call in (eng.request, eng.propose):
+            out = call("agent", "pay.send", {"to": "bob@example.com"}, items=sneaky)
+            self.assertEqual((out["ok"], out["error"]), (False, "said_not_allowed"))
+        self.assertEqual(events(eng, "PROPOSED_BY_AGENT") + events(eng, "PROPOSED"), [])
+        self.assertEqual(ran, [])
+        self.assertEqual(events(eng, "REQUEST_REFUSED")[-1]["payload"]["reason"], "said_not_allowed")
+
+    def test_core_renders_the_words(self):
+        eng, _ = make()
+        token = eng.request("agent", "pay.send", {"to": "bob@example.com"}, items=ITEMS)["token"]
+        self.assertEqual([it["said"] for it in eng.tokens.get(token)["items"]], ["bob at example dot com", "two point four million"])
+        out = eng.show("siya", token, "I'll pay bob@example.com 2400000. Right?", channel="spoken")   # the digits are not the words
+        self.assertEqual((out["error"], out["key"]), ("item_not_in_text", "to"))
+        self.assertTrue(eng.show("siya", token, TEXT, channel="spoken")["ok"])
+
+    def test_without_a_renderer_the_value_is_said_as_its_text(self):
+        reg = Registry([gated("pay.send", heard=True, products=frozenset({"siya"}))])
+        eng = Engine(reg)
+        eng.register("pay.send", lambda a: {})
+        items = [{"key": "amount", "value": 2400000}, {"key": "crew", "value": ["Kerry", "Tom"], "kind": "list"}]
+        token = eng.request("agent", "pay.send", {}, items=items)["token"]
+        self.assertEqual([it["said"] for it in eng.tokens.get(token)["items"]], ["2400000", "Kerry and Tom"])
+        self.assertTrue(eng.show("siya", token, "I'll pay 2400000 to Kerry and Tom. Right?", channel="spoken")["ok"])
+
+    def test_the_words_are_in_the_hash(self):
+        plain, _ = make()
+        other = Registry([gated("pay.send", heard=True, products=frozenset({"siya"}))])
+        eng2 = Engine(other)
+        eng2.register("pay.send", lambda a: {})
+        eng2.register_renderer("pay.send", lambda key, value: "two point four MILLION" if key == "amount" else str(value))
+        self.assertTrue(plain.request("agent", "pay.send", {"to": "bob@example.com"}, items=ITEMS)["ok"])
+        self.assertTrue(eng2.request("agent", "pay.send", {"to": "bob@example.com"}, items=ITEMS)["ok"])
+        h1 = events(plain, "PROPOSED_BY_AGENT")[-1]["payload"]["items_hash"]
+        h2 = events(eng2, "PROPOSED_BY_AGENT")[-1]["payload"]["items_hash"]
+        self.assertNotEqual(h1, h2)                                              # the same values, other words: another proposal
+
+    def test_a_renderer_that_fails_refuses_the_proposal(self):
+        for bad in (lambda k, v: 1 / 0, lambda k, v: 7, lambda k, v: ""):
+            with self.subTest(renderer=bad):
+                reg = Registry([gated("pay.send", heard=True, products=frozenset({"siya"}))])
+                eng = Engine(reg)
+                eng.register("pay.send", lambda a: {})
+                eng.register_renderer("pay.send", bad)
+                out = eng.request("agent", "pay.send", {}, items=ITEMS)
+                self.assertEqual((out["ok"], out["error"]), (False, "said_not_rendered"))
+                self.assertEqual(events(eng, "PROPOSED_BY_AGENT"), [])
+
+    def test_register_renderer_rules(self):
+        eng, _ = make()
+        with self.assertRaises(ValueError):
+            eng.register_renderer("pay.send", words)                      # twice
+        with self.assertRaises(ValueError):
+            eng.register_renderer("nope.send", words)                     # undeclared
+        with self.assertRaises(ValueError):
+            eng.register_renderer(" pay.send", words)                     # not a plain name
+        with self.assertRaises(TypeError):
+            eng.register_renderer("notes.read", "words")                  # not callable
+
+    def test_a_correction_is_rendered_again(self):
+        eng, _ = make()
+        token = eng.request("agent", "pay.send", {"to": "bob@example.com"}, items=ITEMS)["token"]
+        new = eng.correct("siya", token, "amount", 2500000)["token"]
+        self.assertEqual(eng.tokens.get(new)["items"][1]["said"], "two point five million")
+        self.assertEqual(eng.show("siya", new, TEXT, channel="spoken")["error"], "item_not_in_text")
+        self.assertTrue(eng.show("siya", new, "I'll pay bob at example dot com two point five million. Right?", channel="spoken")["ok"])
 
 
 class Clock:

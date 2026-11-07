@@ -262,6 +262,7 @@ class Engine:
         self.approver_check = approver_check
         self.record_shown_text = record_shown_text is True   # 0.2.0: the log holds a shown text only when asked to
         self._executors: dict[str, Executor] = {}
+        self._renderers: dict[str, Callable[[str, object], str]] = {}   # 0.2.0: how a capability's values are said
 
     def close(self) -> None:
         """Close the audit log and the token store. An engine left open holds its SQLite connections."""
@@ -276,6 +277,35 @@ class Engine:
         if capability in self._executors:
             raise ValueError(f"executor already registered for {capability!r}")
         self._executors[capability] = fn
+
+    def register_renderer(self, capability: str, fn: Callable[[str, object], str]) -> None:
+        """How this capability's item values are put into words for the human (0.2.0): `fn(key, value) -> str`,
+        registered in code like an executor, one per capability. Without one, a value is said as its text
+        (`str(value)`; a list as its elements joined by "and"). The proposer never supplies the words: Core renders
+        every item's `said` form itself when the proposal is made, and that form is in the items hash."""
+        if name_problem(capability):
+            raise ValueError(f"cannot register a renderer: {capability!r} is not a plain capability name")
+        if capability not in self.registry:
+            raise ValueError(f"cannot register a renderer for undeclared capability {capability!r}")
+        if capability in self._renderers:
+            raise ValueError(f"renderer already registered for {capability!r}")
+        if not callable(fn):
+            raise TypeError("a renderer must be a callable fn(key, value) -> str")
+        self._renderers[capability] = fn
+
+    def _render(self, capability: str, key: str, value: object) -> str | None:
+        """The words for one item's value: the registered renderer's, else the value as text. None when the renderer
+        raised or did not return non-empty text (fail closed: no words, no proposal)."""
+        fn = self._renderers.get(capability)
+        if fn is None:
+            if type(value) is list:
+                return " and ".join(_as_text(e) for e in value) or None
+            return _as_text(value) or None
+        try:
+            said = fn(key, value)
+        except Exception:  # noqa: BLE001
+            return None
+        return said if type(said) is str and said.strip() else None
 
     def _is_agent(self, name: object) -> bool:
         """Not a human, as far as this engine can tell: on the non-human list, or (when `humans` is set)
@@ -361,6 +391,20 @@ class Engine:
             text = items_text(items)
         except ConfigError:
             return None, self._refuse(principal, capability, "items_not_storable")
+        if len(text.encode("utf-8")) > ARGUMENTS_MAX_BYTES:
+            return None, self._refuse(principal, capability, "items_too_large")
+        items = json.loads(text)
+        if any("said" in it for it in items):          # the words are Core's, never the proposer's (Claude 22:05, hole 1)
+            return None, self._refuse(principal, capability, "said_not_allowed")
+        for it in items:
+            said = self._render(capability, it["key"], it["value"])
+            if said is None:
+                return None, self._refuse(principal, capability, "said_not_rendered")
+            it["said"] = said
+        try:
+            text = items_text(items)
+        except ConfigError:
+            return None, self._refuse(principal, capability, "said_not_rendered")
         if len(text.encode("utf-8")) > ARGUMENTS_MAX_BYTES:
             return None, self._refuse(principal, capability, "items_too_large")
         return json.loads(text), None
@@ -538,11 +582,12 @@ class Engine:
             return {"ok": False, "state": "not_heard", "error": "audit_write_failed"}
         return {"ok": True, "state": "heard", "token": token, "items_hash": rec["items_hash"], "heard_seq": seq}
 
-    def correct(self, principal: str, token: str, key: str, value: object, *, said: str | None = None) -> dict:
+    def correct(self, principal: str, token: str, key: str, value: object) -> dict:
         """The human changed one item before the yes ("no, two point five million"): a NEW proposal with that item's
-        value (and said form) changed and everything else the same, which must be shown and heard again; the old
-        token is withdrawn and linked to the new one (WITHDRAWN.new_token). Refused for an item the proposal does not
-        hold (`unknown_item`), a value the store cannot hold, or a token that is used, running or expired."""
+        value changed, its words rendered again by Core, and everything else the same, which must be shown and heard
+        again; the old token is withdrawn and linked to the new one (WITHDRAWN.new_token). Refused for an item the
+        proposal does not hold (`unknown_item`), a value the store cannot hold or render, or a token that is used,
+        running or expired."""
         rec, refusal = self._pending(principal, token, "correct", "CORRECT_REFUSED")
         if refusal:
             return refusal
@@ -553,10 +598,10 @@ class Engine:
             return self._refuse_confirm(principal, token, "unknown_item", action="correct", event="CORRECT_REFUSED", **named)
         for it in hits:
             it["value"] = value
+            said = self._render(rec["capability"], key, value)   # the words are Core's, rendered again for the new value
             if said is None:
-                it.pop("said", None)                   # the old words no longer fit the new value
-            else:
-                it["said"] = said
+                return self._refuse_confirm(principal, token, "said_not_rendered", action="correct", event="CORRECT_REFUSED", **named)
+            it["said"] = said
         try:
             text = items_text(items)
         except ConfigError:

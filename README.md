@@ -71,13 +71,13 @@ What it does not protect against is listed in full [further down](#what-oathline
 
 Standard library only. Python 3.10+.
 
-The whole `oathline/` package is 1870 lines of Python in 6 files. Count them yourself from the repository root:
+The whole `oathline/` package is 1917 lines of Python in 6 files. Count them yourself from the repository root:
 
 ```bash
 python -c "import glob; print(sum(1 for f in glob.glob('oathline/*.py') for _ in open(f, encoding='utf-8')))"
 ```
 
-The repository has 304 tests. `python -m unittest discover -s tests` runs them and prints the count.
+The repository has 311 tests. `python -m unittest discover -s tests` runs them and prints the count.
 
 An earlier version of Oathline Core recorded 233 events in its hash-chained audit log during one internal job for our own company (30 Sep to 2 Oct 2026).
 The job's audit logs are private, so this can't be checked from this repository.
@@ -253,7 +253,7 @@ python -m unittest discover -s tests
 ```
 
 The example shows a read running, a write waiting for a human, and the audit log proving it.
-The 304 tests need no network.
+The 311 tests need no network.
 
 The same flow in your own code. This block runs as written; the stand-ins at the top
 (`user_text`, `model_output`, `send_email`, `show_to_a_human`) are where your app plugs in:
@@ -396,11 +396,12 @@ capability declared `heard=True`, 0.2.0 adds that: nothing is written unheard.
 
 ```python
 from oathline import Capability, Engine, Registry
-registry = Registry([Capability("pay.send", frozenset({"agent", "alice"}), writes=True, needs_confirmation=True, heard=True)])
+registry = Registry([Capability("pay.send", frozenset({"agent", "alice"}), writes=True, needs_confirmation=True, heard=True,
+                                products=frozenset({"product"}))])       # only "product" may say what the human was shown
 engine = Engine(registry)                                    # the log keeps the text's hash; record_shown_text=True keeps the text
 engine.register("pay.send", lambda a: {"paid": a["to"]})
-items = [{"key": "to", "value": "bob@example.com", "said": "bob at example dot com", "label": "To"},
-         {"key": "amount", "value": 2400000, "said": "two point four million", "label": "Amount"}]
+engine.register_renderer("pay.send", lambda key, value: {"to": "bob at example dot com", "amount": "two point four million"}[key])
+items = [{"key": "to", "value": "bob@example.com", "label": "To"}, {"key": "amount", "value": 2400000, "label": "Amount"}]
 p = engine.request("agent", "pay.send", {"to": "bob@example.com", "amount": 2400000}, items=items)
 print(engine.confirm("alice", p["token"])["error"])                                    # unheard: nothing was shown
 engine.show("product", p["token"], "I'll pay bob at example dot com two point four million. Right?", channel="spoken")
@@ -409,9 +410,10 @@ print(engine.confirm("alice", p["token"])["state"])                             
 ```
 
 - **Shown.** `show(principal, token, text, channel=)` is the product's statement of the exact text the human
-  got, by voice (`spoken`), on a screen (`screen`) or as a card (`card`). It is refused unless every item is
-  in that text: a spoken or preset item by its `said` form, else its value, as whole words (the same
-  `appears_verbatim` the model's arguments pass through); a list item (`kind: "list"`: ticks, names, signers)
+  got, by voice (`spoken`), on a screen (`screen`) or as a card (`card`). Only a name in the capability's
+  `products` may make it; a model actor never can. It is refused unless every item is in that text: a spoken
+  or preset item by its `said` form, which Core renders itself from the value (`register_renderer`; the
+  proposer cannot supply it), as whole words (the same `appears_verbatim` the model's arguments pass through); a list item (`kind: "list"`: ticks, names, signers)
   element by element, or by its declared `whole_word` ("everyone"); an item for the screen (`shown_as:
   "screen"`: an email, a long record) by its label, on a screen or card channel only; a kept item by its
   label. The `SHOWN` event holds the text's SHA-256, its length and the channel. The text itself is kept only
@@ -433,10 +435,13 @@ the limits below: heard is not understood.
 
 ## Reference
 
-**The hearing rule's names.** `Capability(..., heard=True)` is allowed on a gated capability only. `items` on
-`request()` and `propose()` is a non-empty list of `{key, value}` dicts; optional `said`, `label`, `kind`,
-`shown_as` (`spoken`, `screen`, `kept`, `preset`) and `whole_word`, all text; the same JSON and size rules as
-the arguments. `Engine(..., record_shown_text=True)` keeps shown texts in the log; the default keeps their
+**The hearing rule's names.** `Capability(..., heard=True, products=frozenset({...}))` is allowed on a gated
+capability only, and must name the product actors that may show and hear it (never a model actor). `items` on
+`request()` and `propose()` is a non-empty list of `{key, value}` dicts; optional `label`, `kind`, `shown_as`
+(`spoken`, `screen`, `kept`, `preset`) and `whole_word`, all text; the same JSON and size rules as the
+arguments. The words an item is said in (`said`) are Core's: `engine.register_renderer(capability, fn)` with
+`fn(key, value) -> str`, else the value as text; an item that arrives with a `said` is refused. The items hash
+covers key, value, said, kind and shown_as. `Engine(..., record_shown_text=True)` keeps shown texts in the log; the default keeps their
 hashes. `show()`, `hear()` and `correct()` return `state` `shown`, `heard` or `proposed` (a new token) on
 success, and a refusal code from the table below otherwise; a refusal names the item in `key` where there is
 one.
@@ -530,6 +535,8 @@ check it before using `v.candidates[0]`.
 | `stale_showing` | `hear()` was called, but the proposal's items are no longer the ones that were shown. Show it again |
 | `unknown_item` | `correct()` named an item the proposal does not hold. `key` names it. Nothing changed |
 | `not_the_product` | `show()`, `hear()` or `correct()` was called by a name that is not one of the capability's registered `products`, or by a model actor. Only the product that puts the words in front of the human may say what it showed |
+| `said_not_allowed` | An item arrived with a `said` form. The words an item is said in are Core's (`register_renderer`), never the proposer's: drop the field |
+| `said_not_rendered` | The capability's renderer raised, or did not return non-empty text, for an item's value (or the rendered items do not fit the store). No words, no proposal |
 | `execution_failed` | The executor raised an error. The error text is in the `EXECUTE_FAILED` event in the audit log |
 | `execution_returned_failure` | The executor returned `"ok": False`. `state` is `failed`; `result` holds what it returned |
 | `audit_write_failed` | A record the call needs before it may go on (`REQUEST`, `AUTHORIZED`, `PROPOSED`, `CONFIRMED`, `EXECUTING`) could not be written, so nothing ran and nothing was kept: a proposal with no record is withdrawn, and a confirmed token is given back so the same confirmation can be made again once the log is free. `state` is `not_run`. If the token could not be given back either, `warning` is `token_spent` |
