@@ -1,5 +1,59 @@
 # Changelog
 
+## 0.2.0
+
+The hearing rule: nothing is written unheard. Opt-in by capability; everything of 0.1.2 is unchanged.
+
+### What 0.1.2 could not say
+
+- A confirmation token was bound to the exact ARGUMENTS of an action by its integrity hash, confirmed once, by a
+  human, and recorded. It said nothing about what the human was SHOWN before saying yes: an approval card, a
+  read-back spoken by a voice product. The engine could not tell a yes to the right words from a yes to no
+  words at all, or a yes given before the proposal was changed under it.
+
+### What changed
+
+- `Capability(..., heard=True)` declares a gated capability that runs only after the human was shown exactly
+  what will be written, had it, and said yes to the items as they stand at that moment. The default is `False`:
+  a capability that does not declare it meets no new refusal, writes no new event, and the 250 tests of 0.1.2
+  pass unchanged.
+- A proposal may carry `items`: what will be written, as `{key, value}` dicts with an optional `said` form (how
+  the value is spoken: "two point four million"), `label`, `kind` (`"list"` for ticks, names, signers), `shown_as`
+  (`spoken`, `screen`, `kept`, `preset`) and `whole_word` ("everyone"). Items are checked with the arguments' own
+  JSON rules and stored beside them with a hash of their own (`items_hash`). The integrity hash of 0.1.2 is
+  unchanged, so a 0.1.2 token store opens under 0.2.0 (two columns added on open) and a 0.2.0 store opens under
+  0.1.2. A capability declared `heard=True` is refused `items_required` without items.
+- `Engine.show(principal, token, text, channel=)`: the product's statement of the exact text the human got. It
+  is refused unless every item is in that text: a spoken or preset item by its `said` form, else its value, as
+  whole words (`validator.appears_verbatim`, the same function the model's arguments pass through); a list item
+  element by element or by its declared whole word; a screen item by its label, on a `screen` or `card` channel
+  only; a kept item by its label. The `SHOWN` event holds the token, the items hash, the text's SHA-256, its
+  length and the channel. The text itself is in the log only when the engine is built with
+  `record_shown_text=True`, and then up to 4,096 characters (a longer one leaves a 512-character preview): a
+  governance log is private by default, and a test proves the default log holds no shown text.
+- `Engine.hear(principal, token, channel=)`: the product's statement that the human had the shown text
+  (spoken to the end, the card delivered). `HEARD` holds the items hash and the shown text's SHA-256. Refused
+  before any showing (`not_shown`) and when the items are no longer the shown ones (`stale_showing`).
+- `confirm()` of a heard capability refuses `unheard` (no HEARD for the token) and `stale_hearing` (the HEARD
+  names other items than the proposal holds now). Neither spends the token. `CONFIRMED` and
+  `CONFIRMED_BY_HUMAN` record `items_hash`, `heard_seq` and `text_sha256`; `EXECUTING` records `items_hash`.
+- `Engine.correct(principal, token, key, value, said=)`: the human's correction before the yes is a NEW
+  proposal with that item changed, which must be shown and heard again; the old token is withdrawn and linked
+  (`WITHDRAWN` with `new_token`; the new `PROPOSED` names `corrected_from`).
+- `Engine.why(token)`: one plain line for "why didn't it run". `Engine.unheard_runs()`: runs of a capability
+  declared heard now with no hearing of their items before them (a run from before the flag was set shows up).
+- `appears_verbatim` is exported. New event types: `SHOWN`, `SHOW_REFUSED`, `HEARD`, `HEAR_REFUSED`,
+  `WITHDRAWN`, `CORRECT_REFUSED`. New refusal codes: see the README's table. The audit schema version is
+  unchanged (1): a 0.1.2 log verifies under 0.2.0 and a 0.2.0 log under 0.1.2.
+- 47 new tests (tests/test_hearing.py, test_items.py, test_hearing_hardening.py, test_hearing_conformance.py):
+  the rule, its refusals, a locked log at show / hear / correct, a crash between the hearing and the yes, 4,000
+  random shapes through the four calls, a correction racing twelve confirmations, and a scripted product whose
+  log is read with the two counters a grader would use (unheard presses, unnamed marks: 0 / 0). The rows are in
+  `ATTACKS.md`; the rule is the Constitution's rule 9.
+- What the rule does not promise, in the README's limits: heard is not understood; `show()` and `hear()` are
+  the product's statements and the core cannot see a screen or hear a speaker; a correction the product fails
+  to take is a wrong value proposed with the person's consent, on the record as such.
+
 ## 0.1.2
 
 A locked audit log no longer makes the engine raise, and no longer loses a human's confirmation.

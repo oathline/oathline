@@ -9,9 +9,9 @@ from .audit import AuditError, AuditLog
 from .capabilities import Capability, Denied, Grant, Registry
 from .engine import Engine, is_non_human
 from .tokens import ConfigError, Confirmed, TokenStore
-from .validator import FORBIDDEN_KEYS, Validated, validate
+from .validator import FORBIDDEN_KEYS, Validated, appears_verbatim, validate
 
-__version__ = "0.1.2"
+__version__ = "0.2.0"
 __all__ = ["AuditError", "AuditLog", "Capability", "ConfigError", "Confirmed", "Denied", "Engine",
            "FORBIDDEN_KEYS", "Grant", "Registry", "TokenStore", "Validated", "__version__",
-           "is_non_human", "validate"]
+           "appears_verbatim", "is_non_human", "validate"]

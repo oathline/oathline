@@ -389,7 +389,57 @@ The executor still receives the real value, and a confirmation token still binds
 A request for a capability that isn't declared has every argument value masked. If the masked arguments
 come to more than 8,192 bytes, the log holds only how many arguments there were.
 
+## The hearing rule (0.2.0)
+
+A token binds a yes to the exact arguments. It did not say what the human was SHOWN before saying yes. For a
+capability declared `heard=True`, 0.2.0 adds that: nothing is written unheard.
+
+```python
+from oathline import Capability, Engine, Registry
+registry = Registry([Capability("pay.send", frozenset({"agent", "alice"}), writes=True, needs_confirmation=True, heard=True)])
+engine = Engine(registry)                                    # the log keeps the text's hash; record_shown_text=True keeps the text
+engine.register("pay.send", lambda a: {"paid": a["to"]})
+items = [{"key": "to", "value": "bob@example.com", "said": "bob at example dot com", "label": "To"},
+         {"key": "amount", "value": 2400000, "said": "two point four million", "label": "Amount"}]
+p = engine.request("agent", "pay.send", {"to": "bob@example.com", "amount": 2400000}, items=items)
+print(engine.confirm("alice", p["token"])["error"])                                    # unheard: nothing was shown
+engine.show("product", p["token"], "I'll pay bob at example dot com two point four million. Right?", channel="spoken")
+engine.hear("product", p["token"], channel="spoken")                                   # the words reached her
+print(engine.confirm("alice", p["token"])["state"])                                    # executed, once
+```
+
+- **Shown.** `show(principal, token, text, channel=)` is the product's statement of the exact text the human
+  got, by voice (`spoken`), on a screen (`screen`) or as a card (`card`). It is refused unless every item is
+  in that text: a spoken or preset item by its `said` form, else its value, as whole words (the same
+  `appears_verbatim` the model's arguments pass through); a list item (`kind: "list"`: ticks, names, signers)
+  element by element, or by its declared `whole_word` ("everyone"); an item for the screen (`shown_as:
+  "screen"`: an email, a long record) by its label, on a screen or card channel only; a kept item by its
+  label. The `SHOWN` event holds the text's SHA-256, its length and the channel. The text itself is kept only
+  when the engine is built with `record_shown_text=True`, up to 4,096 characters: a governance log is private
+  by default.
+- **Heard.** `hear(principal, token, channel=)` is the product's statement that the human had the shown text
+  (spoken to the end, the card delivered). One hearing per showing.
+- **Yes to exactly that.** `confirm()` refuses `unheard` (no hearing) and `stale_hearing` (the hearing names
+  other items than the proposal holds now). A correction before the yes, `correct(principal, token, key,
+  value, said=)`, is a new proposal that must be shown and heard again; the old token is withdrawn and the two
+  are linked in the log.
+- **Recorded.** `SHOWN`, `HEARD`, the yes with the hearing it relied on (`CONFIRMED` carries `items_hash`,
+  `heard_seq` and `text_sha256`) and the run (`EXECUTING` carries `items_hash`) are in one chain.
+  `engine.why(token)` says in one line why a token did not run; `engine.unheard_runs()` lists runs of a
+  heard capability with no hearing before them.
+
+A capability that does not declare `heard` behaves exactly as in 0.1.2. What the rule does not promise is in
+the limits below: heard is not understood.
+
 ## Reference
+
+**The hearing rule's names.** `Capability(..., heard=True)` is allowed on a gated capability only. `items` on
+`request()` and `propose()` is a non-empty list of `{key, value}` dicts; optional `said`, `label`, `kind`,
+`shown_as` (`spoken`, `screen`, `kept`, `preset`) and `whole_word`, all text; the same JSON and size rules as
+the arguments. `Engine(..., record_shown_text=True)` keeps shown texts in the log; the default keeps their
+hashes. `show()`, `hear()` and `correct()` return `state` `shown`, `heard` or `proposed` (a new token) on
+success, and a refusal code from the table below otherwise; a refusal names the item in `key` where there is
+one.
 
 **Names.** A principal is the name of whoever is asking: a person or an agent. Your application passes
 it in. A capability is the name of one action. A gated capability is one that needs confirmation
@@ -674,6 +724,15 @@ see [SECURITY.md](https://github.com/oathline/oathline/blob/main/SECURITY.md).
 - Arguments over 8,192 bytes as JSON are refused, and so are arguments nested more than 32 levels deep and
   arguments JSON can't hold (NaN, Infinity, bytes, sets). Arguments are stored and run in the form JSON reads them back: number keys become text.
 - There is no rate limit. An agent can fill the audit log and the token store with requests.
+- "Heard" is not "understood". The rule guarantees the words were spoken or shown with every item in them
+  and that a yes followed; it cannot know the person listened. The record shows what they were told.
+- `show()` and `hear()` are the product's statements. Oathline cannot see a screen or hear a speaker; a
+  product that calls `hear()` for a text nobody heard is outside the core, like an executor that lies today.
+- A correction the product fails to take (the person says "no, two point five" and the product hears a yes)
+  is a wrong value proposed with the person's consent. The log records that they heard it and said yes; only
+  the product's own vocabulary catches that.
+- An item's `said` form is the product's. Where a product cannot supply one, the item must be declared for
+  the screen and shown there; the rule's public wording is then "nothing is written unheard or unseen".
 
 ## Next
 

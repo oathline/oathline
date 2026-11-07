@@ -1,6 +1,6 @@
 # The Oathline constitution
 
-These are the rules Oathline is built around. They are short on purpose. Rules 1 to 7 are enforced by the package and
+These are the rules Oathline is built around. They are short on purpose. Rules 1 to 7 and 9 are enforced by the package and
 have tests. Each rule has limits, and they are not all repeated here: the README section "What Oathline does not
 protect against" lists them. Rule 8 is a rule for how you deploy it: nothing in this package enforces it.
 
@@ -29,6 +29,14 @@ protect against" lists them. Rule 8 is a rule for how you deploy it: nothing in 
 8. **No self-modification.** A governed agent should never change its own code, grants or rules. Changes come from
    people, through normal review and release. The package gives an agent no API to do this, and cannot stop code that runs
    in its own process.
+
+9. **Nothing is written unheard.** A capability that declares `heard=True` runs only after the human was SHOWN exactly
+   what will be written, in words they can check; HEARD it (the product says the text was spoken to the end or the card
+   was delivered); said YES TO EXACTLY THAT (the items as they stand at the moment of the yes, not as they stood when
+   shown: a change after the showing is a new proposal, shown again); and all of it is RECORDED in the same chain as
+   the run. The package checks the words against the items (`show`), keeps the hearing (`hear`), and refuses a yes with
+   no hearing or a hearing of other items (`confirm`). It cannot know the person listened: heard is not understood.
+   A capability that does not declare it is governed by rules 4 to 7 as before.
 
 What the constitution does not cover: authenticating people, and what your executors do once they are allowed to run.
 See the README's "What Oathline does not protect against".
