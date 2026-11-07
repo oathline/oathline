@@ -132,11 +132,12 @@ def items_text(items: object) -> str:
 
 
 def _items_hash(items_s: str) -> str:
-    """SHA-256 over the canonical [[key, value, said, kind, shown_as], ...] of the stored items text: what the human
-    is shown and hears, in which words (`said`, rendered by the engine, never by the proposer), and HOW (a value for
-    the screen, a list of names, the form's own preset is another proposal)."""
-    pairs = [[it["key"], it["value"], it.get("said", ""), it.get("kind", ""), it.get("shown_as", "spoken")]
-             for it in json.loads(items_s)]
+    """SHA-256 over the canonical [[key, value, said, kind, shown_as, label, whole_word], ...] of the stored items
+    text: what the human is shown and hears, in which words (`said`, rendered by the engine, never by the proposer),
+    and HOW: every field the showing check reads (a value for the screen, a list of names, the form's own preset,
+    the label a screen item is named by, the whole word a list is covered by) is part of the proposal."""
+    pairs = [[it["key"], it["value"], it.get("said", ""), it.get("kind", ""), it.get("shown_as", "spoken"),
+              it.get("label", ""), it.get("whole_word", "")] for it in json.loads(items_s)]
     return hashlib.sha256(json.dumps(pairs, sort_keys=True, separators=(",", ":"), ensure_ascii=False).encode("utf-8")).hexdigest()
 
 

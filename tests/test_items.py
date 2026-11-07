@@ -27,8 +27,8 @@ class ItemsInTheStoreTest(unittest.TestCase):
         t = self.s.propose("agent", "pay.send", {"to": "bob@example.com"}, items=ITEMS)
         rec = self.s.get(t)
         self.assertEqual(rec["items"], ITEMS)
-        self.assertEqual(rec["items_hash"], canonical_hash([["to", "bob@example.com", "bob at example dot com", "", "spoken"],
-                                                            ["amount", 2400000, "two point four million", "", "spoken"]]))
+        self.assertEqual(rec["items_hash"], canonical_hash([["to", "bob@example.com", "bob at example dot com", "", "spoken", "To", ""],
+                                                            ["amount", 2400000, "two point four million", "", "spoken", "Amount", ""]]))
         self.assertTrue(rec["readable"])
 
     def test_a_proposal_without_items_has_none(self):
@@ -99,19 +99,26 @@ class HowAnItemIsShownIsInTheHashTest(unittest.TestCase):
     def hash_of(self, item):
         return self.s.get(self.s.propose("agent", "pay.send", {}, items=[item]))["items_hash"]
 
-    def test_the_hash_covers_kind_and_shown_as(self):
+    def test_the_hash_covers_every_field_the_showing_check_reads(self):
         plain = {"key": "body", "value": "Dear Bob"}
         variants = [dict(plain, shown_as="screen"), dict(plain, shown_as="preset"), dict(plain, shown_as="kept"),
-                    dict(plain, kind="list"), dict(plain, kind="list", shown_as="screen")]
+                    dict(plain, kind="list"), dict(plain, kind="list", shown_as="screen"),
+                    dict(plain, label="Body"), dict(plain, label="the email"),             # a screen or kept item is checked by its label
+                    dict(plain, kind="list", whole_word="everyone"), dict(plain, kind="list", whole_word="the"),   # a list by its whole word
+                    dict(plain, said="dear bob")]                                           # and by its words
         hashes = [self.hash_of(plain)] + [self.hash_of(v) for v in variants]
         self.assertEqual(len(set(hashes)), len(hashes), hashes)
         self.assertEqual(self.hash_of(plain), self.hash_of(dict(plain, shown_as="spoken")))   # spoken is the default
-        self.assertEqual(self.hash_of(plain), self.hash_of(dict(plain, label="Body")))       # a label is words, not a showing
 
-    def test_a_rewritten_showing_is_tampered(self):
-        t = self.s.propose("agent", "pay.send", {}, items=[{"key": "body", "value": "Dear Bob", "shown_as": "screen"}])
-        self.s._db.execute("UPDATE proposals SET items=? WHERE id=?", (json.dumps([{"key": "body", "value": "Dear Bob"}]), t))
-        self.assertEqual(self.s.confirm("agent", t).error, "tampered")
+    def test_a_rewritten_field_of_the_showing_is_tampered(self):
+        item = {"key": "crew", "value": ["Kerry", "Tom"], "kind": "list", "shown_as": "screen", "label": "the crew",
+                "whole_word": "everyone", "said": "Kerry and Tom"}
+        for field, bad in (("shown_as", "spoken"), ("kind", ""), ("label", "the"), ("whole_word", "the"), ("said", "nobody")):
+            with self.subTest(field=field):
+                t = self.s.propose("agent", "pay.send", {}, items=[item])
+                rewritten = dict(item, **{field: bad})
+                self.s._db.execute("UPDATE proposals SET items=? WHERE id=?", (json.dumps([rewritten]), t))
+                self.assertEqual(self.s.confirm("agent", t).error, "tampered")
 
 
 class StoreFrom012Test(unittest.TestCase):

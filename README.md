@@ -71,7 +71,7 @@ What it does not protect against is listed in full [further down](#what-oathline
 
 Standard library only. Python 3.10+.
 
-The whole `oathline/` package is 1917 lines of Python in 6 files. Count them yourself from the repository root:
+The whole `oathline/` package is 1918 lines of Python in 6 files. Count them yourself from the repository root:
 
 ```bash
 python -c "import glob; print(sum(1 for f in glob.glob('oathline/*.py') for _ in open(f, encoding='utf-8')))"
