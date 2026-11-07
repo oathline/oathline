@@ -17,8 +17,9 @@ TEXT = "I'll pay bob at example dot com two point four million. Right?"
 
 
 def make(**engine_kw):
-    """pay.send is a HEARD capability; email.send is gated as in 0.1.2; notes.read is a read."""
-    reg = Registry([gated("pay.send", heard=True), gated("email.send"), Capability("notes.read", frozenset({"agent", "alice"}))])
+    """pay.send is a HEARD capability whose product actor is siya; email.send is gated as in 0.1.2; notes.read is a read."""
+    reg = Registry([gated("pay.send", heard=True, products=frozenset({"siya"})), gated("email.send", products=frozenset({"siya"})),
+                    Capability("notes.read", frozenset({"agent", "alice"}))])
     eng = Engine(reg, **engine_kw)
     ran = []
     eng.register("pay.send", lambda a: ran.append(("pay.send", a)) or {"paid": a.get("to")})
@@ -45,7 +46,7 @@ class HeardFlagTest(unittest.TestCase):
             Registry([Capability("notes.read", frozenset({"alice"}), heard=True)])
 
     def test_a_gated_capability_may_declare_heard(self):
-        reg = Registry([gated(heard=True)])
+        reg = Registry([gated(heard=True, products=frozenset({"siya"}))])
         self.assertTrue(reg.get("email.send").heard)
         self.assertTrue(reg.get("email.send").gated)
 
@@ -250,11 +251,12 @@ class HeardTest(unittest.TestCase):
     def test_an_agent_hearing_grants_nothing(self):
         eng, ran = make()
         token = eng.request("agent", "pay.send", {"to": "bob@example.com"}, items=ITEMS)["token"]
-        self.assertTrue(eng.show("agent", token, TEXT, channel="spoken")["ok"])
-        self.assertTrue(eng.hear("agent", token, channel="spoken")["ok"])
-        self.assertEqual(eng.confirm("agent", token)["error"], "non_human_principal")
+        self.assertTrue(eng.show("siya", token, TEXT, channel="spoken")["ok"])      # the product shows and hears
+        self.assertTrue(eng.hear("siya", token, channel="spoken")["ok"])
+        self.assertEqual(eng.confirm("agent", token)["error"], "non_human_principal")   # the agent still cannot confirm
+        self.assertEqual(eng.confirm("siya", token)["error"], "not_an_approver")      # nor can the product
         self.assertEqual(ran, [])
-        self.assertEqual({e["principal"] for e in events(eng, "SHOWN") + events(eng, "HEARD")}, {"agent"})
+        self.assertEqual({e["principal"] for e in events(eng, "SHOWN") + events(eng, "HEARD")}, {"siya"})
 
     def test_rewritten_items_and_hash_are_a_stale_hearing(self):
         eng, ran = make()
@@ -303,7 +305,7 @@ class HeardTest(unittest.TestCase):
         token = eng.request("alice", "email.send", {"to": "bob@example.com"}, items=ITEMS)["token"]   # not a heard capability
         self.assertTrue(eng.confirm("alice", token)["ok"])                                           # ran, as in 0.1.2
         self.assertEqual(eng.unheard_runs(), [])
-        reg = Registry([gated("email.send", heard=True), gated("pay.send", heard=True)])
+        reg = Registry([gated("email.send", heard=True, products=frozenset({"siya"})), gated("pay.send", heard=True, products=frozenset({"siya"}))])
         later = Engine(reg, audit=eng.audit, tokens=eng.tokens)                                       # the same log, the rule now on
         later.register("pay.send", lambda a: {"paid": True})
         listed = later.unheard_runs()
@@ -380,6 +382,48 @@ class CorrectTest(unittest.TestCase):
         self.assertEqual(eng.correct("siya", "tok_" + "0" * 32, "amount", 1)["error"], "unknown_token")
         plain = eng.request("alice", "email.send", {"to": "bob@example.com"})["token"]
         self.assertEqual(eng.correct("siya", plain, "to", "x")["error"], "items_required")
+
+
+class ProductActorTest(unittest.TestCase):
+    """Only the capability's registered product actor may show, hear or correct; never the model actor (Claude 22:05, hole 3)."""
+
+    def test_a_heard_capability_names_its_product(self):
+        with self.assertRaises(ValueError):
+            Registry([gated("pay.send", heard=True)])                                   # nobody to show it: refused
+        for bad in ("model", "assistant", "llm", "agent", "oathline"):
+            with self.subTest(product=bad):
+                with self.assertRaises(ValueError):
+                    Registry([gated("pay.send", heard=True, products=frozenset({bad}))])   # the model actor is never the product
+        reg = Registry([gated("pay.send", heard=True, products=frozenset({"siya"}))])
+        self.assertEqual(reg.get("pay.send").products, frozenset({"siya"}))
+        with self.assertRaises(TypeError):
+            Registry([gated("pay.send", heard=True, products="siya")])
+
+    def test_only_the_product_shows_hears_and_corrects(self):
+        eng, ran = make()
+        token = eng.request("agent", "pay.send", {"to": "bob@example.com"}, items=ITEMS)["token"]
+        for who in ("model", "agent", "alice", "mallory"):
+            with self.subTest(who=who):
+                self.assertEqual(eng.show(who, token, TEXT, channel="spoken")["error"], "not_the_product")
+                self.assertEqual(eng.hear(who, token, channel="spoken")["error"], "not_the_product")
+                self.assertEqual(eng.correct(who, token, "amount", 1)["error"], "not_the_product")
+        self.assertEqual(events(eng, "SHOWN") + events(eng, "HEARD") + events(eng, "WITHDRAWN"), [])
+        self.assertEqual([e["payload"]["reason"] for e in events(eng, "SHOW_REFUSED")], ["not_the_product"] * 4)
+        self.assertEqual(eng.confirm("alice", token)["error"], "unheard")
+        self.assertTrue(eng.show("siya", token, TEXT, channel="spoken")["ok"])
+        self.assertTrue(eng.hear("siya", token, channel="spoken")["ok"])
+        self.assertTrue(eng.confirm("alice", token)["ok"])
+        self.assertEqual(len(ran), 1)
+
+    def test_a_product_registered_for_one_capability_is_not_the_product_of_another(self):
+        reg = Registry([gated("pay.send", heard=True, products=frozenset({"siya"})),
+                        gated("post.publish", heard=True, products=frozenset({"press-desk"}))])
+        eng = Engine(reg)
+        eng.register("pay.send", lambda a: {})
+        eng.register("post.publish", lambda a: {})
+        token = eng.request("agent", "post.publish", {"to": "bob@example.com"}, items=ITEMS)["token"]
+        self.assertEqual(eng.show("siya", token, TEXT, channel="spoken")["error"], "not_the_product")
+        self.assertTrue(eng.show("press-desk", token, TEXT, channel="spoken")["ok"])
 
 
 class Clock:

@@ -74,6 +74,16 @@ def name_problem(value: object) -> str | None:
     return None
 
 
+MODEL_ACTORS = frozenset({"model", "assistant", "llm", "agent", "system", "scheduler", "runner", "browser",
+                          "gateway", "verifier", "oathline"})   # the engine's default non-human list, as a name rule here
+
+
+def _is_model_actor(name: str) -> bool:
+    """A name that is one of the model actors, in any case or width (the folding `engine.is_non_human` uses)."""
+    folded = "".join(ch for ch in unicodedata.normalize("NFKC", name) if not not_allowed_in_a_name(ch)).strip().casefold()
+    return folded in MODEL_ACTORS or folded.split("@", 1)[0] in MODEL_ACTORS
+
+
 def _name_set(owner: str, field: str, value: object) -> frozenset:
     if isinstance(value, (str, bytes)) or not isinstance(value, (set, frozenset, list, tuple)):
         raise TypeError(f"{owner}: {field} must be a set of names, not {type(value).__name__}")
@@ -104,10 +114,14 @@ class Capability:
     # be written (`Engine.show`), had it (`Engine.hear`) and confirmed the items as they stand at that moment.
     # False (the default): the capability behaves exactly as in 0.1.2 and meets none of the hearing refusals.
     heard: bool = False
+    # The product actors (0.2.0): the only names that may say what the human was shown (`Engine.show`), that the
+    # human had it (`Engine.hear`) or corrected it (`Engine.correct`) for this capability. A heard capability must
+    # name at least one. A name on the engine's default non-human list (model, assistant, llm, agent...) is refused.
+    products: frozenset[str] = frozenset()
 
     def __post_init__(self):
         # the name sets are copied into frozensets, so the caller's own set cannot widen a grant later
-        for field in ("principals", "approvers", "secret_arguments", "arguments"):
+        for field in ("principals", "approvers", "secret_arguments", "arguments", "products"):
             object.__setattr__(self, field, _name_set(repr(self.name), field, getattr(self, field)))
 
     @property
@@ -134,9 +148,12 @@ class Registry:
         for c in capabilities:
             if name_problem(c.name) or c.name in caps:
                 raise ValueError(f"duplicate or unusable capability name: {c.name!r}")
-            for who in (*c.principals, *c.approvers):
+            for who in (*c.principals, *c.approvers, *c.products):
                 if name_problem(who):
                     raise ValueError(f"{c.name}: unusable principal name {who!r} ({name_problem(who)})")
+            for who in c.products:
+                if _is_model_actor(who):
+                    raise ValueError(f"{c.name}: {who!r} is a model actor and can never be the product that shows or hears")
             if c.writes and not c.needs_confirmation:
                 # writes are always confirmed; make that explicit, not implied
                 raise ValueError(f"{c.name}: a writing capability must set needs_confirmation=True")
@@ -145,6 +162,8 @@ class Registry:
             if c.heard and not c.gated:
                 # a hearing guards a write or a confirmed action; a read has nothing to be heard
                 raise ValueError(f"{c.name}: heard=True needs a gated capability (writes or needs_confirmation)")
+            if c.heard and not c.products:
+                raise ValueError(f"{c.name}: heard=True needs at least one product actor to show and hear it (products=)")
             caps[c.name] = c
         self._caps: Mapping[str, Capability] = MappingProxyType(caps)
 

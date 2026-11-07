@@ -9,7 +9,8 @@ from oathline import Capability, Engine, Registry
 
 
 def registry(heard=True):
-    return Registry([Capability("form.save", frozenset({"agent", "alice"}), writes=True, needs_confirmation=True, heard=heard)])
+    return Registry([Capability("form.save", frozenset({"agent", "alice"}), writes=True, needs_confirmation=True, heard=heard,
+                                products=frozenset({"siya"}))])
 
 
 CORPUS = [

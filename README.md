@@ -71,13 +71,13 @@ What it does not protect against is listed in full [further down](#what-oathline
 
 Standard library only. Python 3.10+.
 
-The whole `oathline/` package is 1845 lines of Python in 6 files. Count them yourself from the repository root:
+The whole `oathline/` package is 1869 lines of Python in 6 files. Count them yourself from the repository root:
 
 ```bash
 python -c "import glob; print(sum(1 for f in glob.glob('oathline/*.py') for _ in open(f, encoding='utf-8')))"
 ```
 
-The repository has 299 tests. `python -m unittest discover -s tests` runs them and prints the count.
+The repository has 302 tests. `python -m unittest discover -s tests` runs them and prints the count.
 
 An earlier version of Oathline Core recorded 233 events in its hash-chained audit log during one internal job for our own company (30 Sep to 2 Oct 2026).
 The job's audit logs are private, so this can't be checked from this repository.
@@ -253,7 +253,7 @@ python -m unittest discover -s tests
 ```
 
 The example shows a read running, a write waiting for a human, and the audit log proving it.
-The 299 tests need no network.
+The 302 tests need no network.
 
 The same flow in your own code. This block runs as written; the stand-ins at the top
 (`user_text`, `model_output`, `send_email`, `show_to_a_human`) are where your app plugs in:
@@ -529,6 +529,7 @@ check it before using `v.candidates[0]`.
 | `not_shown` | `hear()` was called before any `show()` for this token |
 | `stale_showing` | `hear()` was called, but the proposal's items are no longer the ones that were shown. Show it again |
 | `unknown_item` | `correct()` named an item the proposal does not hold. `key` names it. Nothing changed |
+| `not_the_product` | `show()`, `hear()` or `correct()` was called by a name that is not one of the capability's registered `products`, or by a model actor. Only the product that puts the words in front of the human may say what it showed |
 | `execution_failed` | The executor raised an error. The error text is in the `EXECUTE_FAILED` event in the audit log |
 | `execution_returned_failure` | The executor returned `"ok": False`. `state` is `failed`; `result` holds what it returned |
 | `audit_write_failed` | A record the call needs before it may go on (`REQUEST`, `AUTHORIZED`, `PROPOSED`, `CONFIRMED`, `EXECUTING`) could not be written, so nothing ran and nothing was kept: a proposal with no record is withdrawn, and a confirmed token is given back so the same confirmation can be made again once the log is free. `state` is `not_run`. If the token could not be given back either, `warning` is `token_spent` |

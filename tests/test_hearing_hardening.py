@@ -20,7 +20,8 @@ TEXT = "I'll pay bob at example dot com two point four million. Right?"
 
 
 def registry():
-    return Registry([Capability("pay.send", frozenset({"agent", "alice"}), writes=True, needs_confirmation=True, heard=True)])
+    return Registry([Capability("pay.send", frozenset({"agent", "alice"}), writes=True, needs_confirmation=True, heard=True,
+                                products=frozenset({"siya"}))])
 
 
 def engine(folder, effects=None):
@@ -148,23 +149,27 @@ class FuzzTheHearingTest(unittest.TestCase):
         tokens = []
         for i in range(self.SHAPES):
             move = rng.randrange(6)
-            tok = rng.choice(tokens) if tokens and rng.random() < 0.9 else rng.choice(["tok_" + "0" * 32, "nope", None, 5])
+            tok = (tokens[-1] if rng.random() < 0.7 else rng.choice(tokens)) if tokens and rng.random() < 0.9 \
+                else rng.choice(["tok_" + "0" * 32, "nope", None, 5])
+            product = rng.choice(["siya"] * 6 + self.NAMES)                      # mostly the product, sometimes anyone
+            text = rng.choice([TEXT] * 4 + self.TEXTS)                           # mostly the right words, sometimes junk
+            channel = rng.choice(["spoken"] * 4 + self.CHANNELS)
             try:
                 if move == 0 or not tokens:
                     out = eng.request("agent", "pay.send", {"to": "bob@example.com"}, items=ITEMS if rng.random() < 0.8 else None)
                     if out.get("ok"):
                         tokens.append(out["token"])
                 elif move == 1:
-                    eng.show(rng.choice(self.NAMES), tok, rng.choice(self.TEXTS), channel=rng.choice(self.CHANNELS))
+                    eng.show(product, tok, text, channel=channel)
                 elif move == 2:
-                    eng.hear(rng.choice(self.NAMES), tok, channel=rng.choice(self.CHANNELS))
+                    eng.hear(product, tok, channel=channel)
                 elif move == 3:
-                    out = eng.correct(rng.choice(self.NAMES), tok, rng.choice(["amount", "to", "colour", "", None]), rng.choice(self.VALUES),
+                    out = eng.correct(product, tok, rng.choice(["amount", "to", "colour", "", None]), rng.choice(self.VALUES),
                                       said=rng.choice(["two point five million", None, ""]))
                     if out.get("ok"):
                         tokens.append(out["token"])
                 else:
-                    eng.confirm(rng.choice(self.NAMES), tok)
+                    eng.confirm(rng.choice(["alice"] * 4 + self.NAMES), tok)      # mostly the human, sometimes anyone
             except Exception as exc:  # noqa: BLE001
                 self.fail(f"raised at shape {i}: {type(exc).__name__}: {exc}")
             if i % 500 == 499:

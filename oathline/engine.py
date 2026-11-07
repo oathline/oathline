@@ -472,6 +472,11 @@ class Engine:
             return None, self._refuse_confirm(principal, token, "expired", action, event=event)
         if rec["items"] is None:
             return None, self._refuse_confirm(principal, token, "items_required", action, event=event)
+        cap = self.registry.get(rec["capability"])
+        if cap is None:
+            return None, self._refuse_confirm(principal, token, "unknown_capability", action, event=event)
+        if principal not in cap.products or is_non_human(principal, DEFAULT_NON_HUMAN):   # only the registered product actor
+            return None, self._refuse_confirm(principal, token, "not_the_product", action, event=event)   # says what the human got
         return rec, None
 
     def show(self, principal: str, token: str, text: str, *, channel: str = "spoken") -> dict:
