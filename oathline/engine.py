@@ -85,6 +85,8 @@ TOKEN_SHAPE = re.compile(r"tok_[0-9a-f]{32}")   # what TokenStore issues; anythi
 SHOWN_TEXT_MAX_CHARS = 4096    # a shown text up to this long is kept in the log in full, when record_shown_text is on
 SHOWN_TEXT_LIMIT = 16384       # a longer text is refused by show(): nothing is shown
 SHOW_CHANNELS = ("spoken", "screen", "card")   # how the human got the text; a screen item needs screen or card
+WHOLE_WORDS = frozenset({"everyone", "everybody", "all of them", "all of you", "the whole crew", "the whole team",
+                         "the lot", "all present"})   # the only words that may stand for a whole list (0.2.0): Core's, not the proposer's
 
 DEFAULT_NON_HUMAN = frozenset({"model", "assistant", "llm", "agent", "system", "scheduler",
                                "runner", "browser", "gateway", "verifier", "oathline"})
@@ -396,6 +398,15 @@ class Engine:
         items = json.loads(text)
         if any("said" in it for it in items):          # the words are Core's, never the proposer's (Claude 22:05, hole 1)
             return None, self._refuse(principal, capability, "said_not_allowed")
+        cap = self.registry.get(capability)
+        for it in items:                                # nor the whole word, nor how it is shown (the agent's review 22:40)
+            if "whole_word" in it and it["whole_word"] not in WHOLE_WORDS:
+                return None, self._refuse(principal, capability, "whole_word_not_allowed")
+            how = it.get("shown_as", "spoken")
+            declared = {"spoken": None, "screen": "screen_keys", "kept": "kept_keys", "preset": "preset_keys"}[how]
+            if declared is not None and (cap is None or it["key"] not in getattr(cap, declared)):
+                out = self._refuse(principal, capability, "showing_not_declared")
+                return None, {**out, "key": it["key"]}
         for it in items:
             said = self._render(capability, it["key"], it["value"])
             if said is None:

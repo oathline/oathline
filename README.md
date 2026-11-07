@@ -71,13 +71,13 @@ What it does not protect against is listed in full [further down](#what-oathline
 
 Standard library only. Python 3.10+.
 
-The whole `oathline/` package is 1923 lines of Python in 6 files. Count them yourself from the repository root:
+The whole `oathline/` package is 1944 lines of Python in 6 files. Count them yourself from the repository root:
 
 ```bash
 python -c "import glob; print(sum(1 for f in glob.glob('oathline/*.py') for _ in open(f, encoding='utf-8')))"
 ```
 
-The repository has 314 tests. `python -m unittest discover -s tests` runs them and prints the count.
+The repository has 317 tests. `python -m unittest discover -s tests` runs them and prints the count.
 
 An earlier version of Oathline Core recorded 233 events in its hash-chained audit log during one internal job for our own company (30 Sep to 2 Oct 2026).
 The job's audit logs are private, so this can't be checked from this repository.
@@ -253,7 +253,7 @@ python -m unittest discover -s tests
 ```
 
 The example shows a read running, a write waiting for a human, and the audit log proving it.
-The 314 tests need no network.
+The 317 tests need no network.
 
 The same flow in your own code. This block runs as written; the stand-ins at the top
 (`user_text`, `model_output`, `send_email`, `show_to_a_human`) are where your app plugs in:
@@ -539,6 +539,8 @@ check it before using `v.candidates[0]`.
 | `not_the_product` | `show()`, `hear()` or `correct()` was called by a name that is not one of the capability's registered `products`, or by a model actor. Only the product that puts the words in front of the human may say what it showed |
 | `said_not_allowed` | An item arrived with a `said` form. The words an item is said in are Core's (`register_renderer`), never the proposer's: drop the field |
 | `said_not_rendered` | The capability's renderer raised, or did not return non-empty text, for an item's value (or the rendered items do not fit the store). No words, no proposal |
+| `whole_word_not_allowed` | A list item's `whole_word` is not one of the words Core lets stand for a whole list (`everyone`, `everybody`, `all of them`, `all of you`, `the whole crew`, `the whole team`, `the lot`, `all present`). The proposer does not choose it |
+| `showing_not_declared` | An item asks to be shown as `screen`, `kept` or `preset`, and its key is not in the capability's `screen_keys`, `kept_keys` or `preset_keys`. `key` names it. How an item is shown is the capability's declaration, never the proposer's choice |
 | `execution_failed` | The executor raised an error. The error text is in the `EXECUTE_FAILED` event in the audit log |
 | `execution_returned_failure` | The executor returned `"ok": False`. `state` is `failed`; `result` holds what it returned |
 | `audit_write_failed` | A record the call needs before it may go on (`REQUEST`, `AUTHORIZED`, `PROPOSED`, `CONFIRMED`, `EXECUTING`) could not be written, so nothing ran and nothing was kept: a proposal with no record is withdrawn, and a confirmed token is given back so the same confirmation can be made again once the log is free. `state` is `not_run`. If the token could not be given back either, `warning` is `token_spent` |

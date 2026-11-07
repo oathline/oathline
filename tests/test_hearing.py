@@ -27,8 +27,9 @@ def words(key, value):
 
 def make(**engine_kw):
     """pay.send is a HEARD capability whose product actor is siya; email.send is gated as in 0.1.2; notes.read is a read."""
-    reg = Registry([gated("pay.send", heard=True, products=frozenset({"siya"})), gated("email.send", products=frozenset({"siya"})),
-                    Capability("notes.read", frozenset({"agent", "alice"}))])
+    reg = Registry([gated("pay.send", heard=True, products=frozenset({"siya"}), screen_keys=frozenset({"body"}),
+                          preset_keys=frozenset({"hours"}), kept_keys=frozenset({"swms"})),
+                    gated("email.send", products=frozenset({"siya"})), Capability("notes.read", frozenset({"agent", "alice"}))])
     eng = Engine(reg, **engine_kw)
     ran = []
     eng.register("pay.send", lambda a: ran.append(("pay.send", a)) or {"paid": a.get("to")})
@@ -553,6 +554,47 @@ class HandWrittenHearingTest(unittest.TestCase):
         self.assertTrue(eng.confirm("alice", token)["ok"])
         later = Engine(Registry([gated("email.send", heard=True, products=frozenset({"siya"}))]), audit=eng.audit, tokens=eng.tokens)
         self.assertEqual([r["reason"] for r in later.unheard_runs()], ["no_hearing"])
+
+
+class ProposerChoicesTest(unittest.TestCase):
+    """The proposer chooses neither the whole word a list hides behind nor how an item is shown (the agent's review 22:40):
+    whole_word comes from Core's vocabulary; screen, kept and preset showings only for keys the capability declares."""
+
+    def test_a_whole_word_comes_from_the_vocabulary(self):
+        eng, _ = make()
+        crew = {"key": "people", "value": ["Kerry Walsh", "Tom Nguyen", "Sarah Mitchell"], "kind": "list"}
+        for bad in ("and", "the", "Kerry", "them", "ok"):
+            with self.subTest(whole_word=bad):
+                out = eng.request("agent", "pay.send", {}, items=[dict(crew, whole_word=bad)])
+                self.assertEqual((out["ok"], out["error"]), (False, "whole_word_not_allowed"))
+        self.assertEqual(events(eng, "PROPOSED_BY_AGENT"), [])
+        for good in ("everyone", "all of them", "the whole crew", "everybody"):
+            with self.subTest(whole_word=good):
+                token = eng.request("agent", "pay.send", {}, items=[dict(crew, whole_word=good)])["token"]
+                self.assertTrue(eng.show("siya", token, f"I'll tick {good}. Right?", channel="spoken")["ok"])
+        token = eng.request("agent", "pay.send", {}, items=[dict(crew, whole_word="everyone")])["token"]
+        self.assertEqual(eng.show("siya", token, "I'll tick Kerry Walsh and Tom Nguyen. Right?", channel="spoken")["error"], "unshown_mark")
+
+    def test_a_showing_other_than_spoken_needs_the_capability_to_declare_the_key(self):
+        eng, _ = make()
+        for how, key in (("screen", "notes"), ("kept", "body"), ("preset", "swms"), ("screen", "to")):
+            with self.subTest(how=how, key=key):
+                out = eng.request("agent", "pay.send", {}, items=[{"key": key, "value": "x", "shown_as": how, "label": "the thing"}])
+                self.assertEqual((out["ok"], out["error"], out.get("key")), (False, "showing_not_declared", key))
+        self.assertEqual(events(eng, "PROPOSED_BY_AGENT"), [])
+        for how, key, text, channel in (("screen", "body", "I'll send the email as typed, check it on screen. Right?", "screen"),
+                                        ("kept", "swms", "the SWMS from the library, as kept. Right?", "spoken"),
+                                        ("preset", "hours", "Hours worked: 8, the form's own. Right?", "spoken")):
+            with self.subTest(how=how):
+                label = {"body": "the email", "swms": "the SWMS from the library", "hours": "Hours worked"}[key]
+                token = eng.request("agent", "pay.send", {}, items=[{"key": key, "value": 8 if key == "hours" else "x", "shown_as": how, "label": label}])["token"]
+                self.assertTrue(eng.show("siya", token, text, channel=channel)["ok"])
+
+    def test_the_declared_keys_are_name_sets(self):
+        with self.assertRaises(TypeError):
+            gated("pay.send", heard=True, products=frozenset({"siya"}), screen_keys="body")
+        with self.assertRaises(ValueError):
+            Registry([gated("pay.send", heard=True, products=frozenset({"siya"}), kept_keys=frozenset({" swms"}))])
 
 
 class Clock:

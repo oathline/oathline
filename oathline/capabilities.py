@@ -118,10 +118,17 @@ class Capability:
     # human had it (`Engine.hear`) or corrected it (`Engine.correct`) for this capability. A heard capability must
     # name at least one. A name on the engine's default non-human list (model, assistant, llm, agent...) is refused.
     products: frozenset[str] = frozenset()
+    # How an item may be shown other than spoken (0.2.0): the proposer never chooses it per item. An item's key must
+    # be in `screen_keys` to be shown on a screen or card by its label (an email, a long record), in `kept_keys` to be
+    # named by its label as kept (the library's), in `preset_keys` to be read as the form's own value.
+    screen_keys: frozenset[str] = frozenset()
+    kept_keys: frozenset[str] = frozenset()
+    preset_keys: frozenset[str] = frozenset()
 
     def __post_init__(self):
         # the name sets are copied into frozensets, so the caller's own set cannot widen a grant later
-        for field in ("principals", "approvers", "secret_arguments", "arguments", "products"):
+        for field in ("principals", "approvers", "secret_arguments", "arguments", "products", "screen_keys", "kept_keys",
+                      "preset_keys"):
             object.__setattr__(self, field, _name_set(repr(self.name), field, getattr(self, field)))
 
     @property
@@ -151,6 +158,9 @@ class Registry:
             for who in (*c.principals, *c.approvers, *c.products):
                 if name_problem(who):
                     raise ValueError(f"{c.name}: unusable principal name {who!r} ({name_problem(who)})")
+            for key in (*c.screen_keys, *c.kept_keys, *c.preset_keys):
+                if name_problem(key):
+                    raise ValueError(f"{c.name}: unusable item key {key!r} ({name_problem(key)})")
             for who in c.products:
                 if _is_model_actor(who):
                     raise ValueError(f"{c.name}: {who!r} is a model actor and can never be the product that shows or hears")
