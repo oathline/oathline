@@ -51,6 +51,15 @@ EXECUTE -> VERIFY, with every stage written to the audit log.
     may create a proposal (`propose`). Its token is redeemed under a human's name - one of the capability's
     named `approvers` if set, else a human granted the capability. The stored arguments then run once, as the
     agent's action on the human's authority; both principals are recorded in the audit log.
+  * THE HEARING RULE (0.2.0): a capability declared `heard=True` runs only after the human was SHOWN exactly
+    what will be written, HEARD it, and confirmed the items as they stand at that moment. A proposal of such
+    a capability carries `items` (what will be written; `items_required` without them). `show()` records the
+    exact text the human got, as its SHA-256 and length (and the text itself, bounded, only when the engine
+    is built with `record_shown_text=True`), after checking that every item is in that text: a spoken item's
+    `said` form (or its value) as whole words, a list item element by element or by its declared whole word
+    ("everyone"), a screen item by its label on a screen channel. `hear()` records that the human had the
+    shown text. `confirm()` then refuses `unheard` (no hearing) and `stale_hearing` (the items changed since).
+    A capability that does not declare `heard` meets none of this.
 """
 from __future__ import annotations
 
@@ -62,7 +71,8 @@ from typing import Callable, Iterable
 
 from .audit import AuditLog, canonical, sha
 from .capabilities import Denied, Registry, name_problem, not_allowed_in_a_name
-from .tokens import ConfigError, TokenStore, arguments_text
+from .tokens import ConfigError, TokenStore, arguments_text, items_text
+from .validator import appears_verbatim
 
 Executor = Callable[[dict], dict]
 Verifier = Callable[[str, dict], bool]
@@ -72,6 +82,9 @@ RESULT_MAX_BYTES = 8192        # a larger result is recorded as size + hash + pr
 PREVIEW_BYTES = 512
 ARGUMENTS_MAX_BYTES = 8192     # larger arguments are refused
 TOKEN_SHAPE = re.compile(r"tok_[0-9a-f]{32}")   # what TokenStore issues; anything else is not a token id
+SHOWN_TEXT_MAX_CHARS = 4096    # a shown text up to this long is kept in the log in full, when record_shown_text is on
+SHOWN_TEXT_LIMIT = 16384       # a longer text is refused by show(): nothing is shown
+SHOW_CHANNELS = ("spoken", "screen", "card")   # how the human got the text; a screen item needs screen or card
 
 DEFAULT_NON_HUMAN = frozenset({"model", "assistant", "llm", "agent", "system", "scheduler",
                                "runner", "browser", "gateway", "verifier", "oathline"})
@@ -188,12 +201,51 @@ def _safe(name: object) -> str:
     return name if name_problem(name) is None else "invalid"
 
 
+def _as_text(value: object) -> str:
+    """An item's value as the words that must be in the shown text when it has no `said` form."""
+    if type(value) is str:
+        return value
+    if isinstance(value, (dict, list)):
+        return canonical(value).decode("utf-8")
+    return str(value)
+
+
+def item_problem(item: dict, text: str, channel: str) -> str | None:
+    """Why an item is NOT in the shown text, or None when it is (the hearing rule, 0.2.0). A spoken or preset item:
+    its `said` form, else its value, as whole words (`appears_verbatim`). A list item: every element as whole words,
+    or its declared `whole_word` ("everyone"). A screen item: its label, on a screen or card channel only. A kept item:
+    its label."""
+    how = item.get("shown_as", "spoken")
+    label = str(item.get("label") or "")
+    if how == "screen":
+        if channel not in ("screen", "card") or not label or not appears_verbatim(label, text):
+            return "screen_not_allowed"
+        return None
+    if how == "kept":
+        if not label or not appears_verbatim(label, text):
+            return "item_not_in_text"
+        return None
+    value = item["value"]
+    if item.get("kind") == "list":
+        whole = item.get("whole_word")
+        if whole and appears_verbatim(str(whole), text):
+            return None
+        elements = value if type(value) is list else [value]
+        if not elements or not all(appears_verbatim(_as_text(e), text) for e in elements):
+            return "unshown_mark"
+        return None
+    said = str(item.get("said") or "") or _as_text(value)
+    if not appears_verbatim(said, text):
+        return "item_not_in_text"
+    return None
+
+
 class Engine:
     def __init__(self, registry: Registry, *, audit: AuditLog | None = None,
                  tokens: TokenStore | None = None, verifier: Verifier | None = None,
                  non_human: Iterable[str] = DEFAULT_NON_HUMAN,
                  approver_check: ApproverCheck | None = None,
-                 humans: Iterable[str] | None = None):
+                 humans: Iterable[str] | None = None, record_shown_text: bool = False):
         names = _plain_names("non_human", non_human)
         if humans is not None:
             humans = frozenset(_plain_names("humans", humans))
@@ -208,6 +260,7 @@ class Engine:
         self.verifier = verifier
         self.non_human = frozenset(names)
         self.approver_check = approver_check
+        self.record_shown_text = record_shown_text is True   # 0.2.0: the log holds a shown text only when asked to
         self._executors: dict[str, Executor] = {}
 
     def close(self) -> None:
@@ -300,14 +353,29 @@ class Engine:
             return None, self._refuse(principal, capability, "arguments_too_large")
         return json.loads(text), None                 # the form JSON reads back: what is stored, hashed and run
 
-    def _propose(self, principal: str, capability: str, arguments: dict, event: str, extra: dict) -> dict:
+    def _admit_items(self, principal: str, capability: str, items: object):
+        """Check the items of request() and propose() (0.2.0). (items, None), or (None, refusal). None passes as None."""
+        if items is None:
+            return None, None
         try:
-            token = self.tokens.propose(principal, capability, arguments)
-            arguments_hash = self.tokens.get(token)["integrity"]
+            text = items_text(items)
+        except ConfigError:
+            return None, self._refuse(principal, capability, "items_not_storable")
+        if len(text.encode("utf-8")) > ARGUMENTS_MAX_BYTES:
+            return None, self._refuse(principal, capability, "items_too_large")
+        return json.loads(text), None
+
+    def _propose(self, principal: str, capability: str, arguments: dict, event: str, extra: dict,
+                 items: list | None = None) -> dict:
+        try:
+            token = self.tokens.propose(principal, capability, arguments, items=items)
+            rec = self.tokens.get(token)
+            arguments_hash, items_hash = rec["integrity"], rec["items_hash"]
         except Exception:  # noqa: BLE001 - no stored proposal, no token
             return self._refuse(principal, capability, "proposal_not_stored")
         if not self._append(event, principal, capability,
-                            {"token": token, "ttl_seconds": self.tokens.ttl, "arguments_hash": arguments_hash, **extra}):
+                            {"token": token, "ttl_seconds": self.tokens.ttl, "arguments_hash": arguments_hash,
+                             "items_hash": items_hash, **extra}):
             try:                                     # a proposal with no record is withdrawn: it must not run later
                 self.tokens.withdraw(token)
             except Exception:  # noqa: BLE001 - it then expires on its own
@@ -316,9 +384,14 @@ class Engine:
         return {"ok": True, "state": "proposed", "token": token}
 
     # ------------------------------------------------------------------
-    def request(self, principal: str, capability: str, arguments: dict | None = None) -> dict:
-        """First call. Read-only capabilities run now; gated ones return a token."""
+    def request(self, principal: str, capability: str, arguments: dict | None = None, *,
+                items: list | None = None) -> dict:
+        """First call. Read-only capabilities run now; gated ones return a token. `items` (0.2.0): what will be
+        written, required for a capability declared `heard=True`, kept for any gated one, ignored by a read."""
         arguments, refusal = self._admit(principal, capability, arguments)
+        if refusal:
+            return refusal
+        items, refusal = self._admit_items(principal, capability, items)
         if refusal:
             return refusal
         if not self._append("REQUEST", principal, capability, self._for_audit(capability, arguments)):
@@ -332,18 +405,24 @@ class Engine:
             return {"ok": False, "state": "not_run", "error": "audit_write_failed"}
         cap = self.registry.get(capability)
         if cap is not None and cap.gated:
+            if cap.heard and items is None:
+                return self._refuse(principal, capability, "items_required")   # the hearing rule: nothing shown, nothing written
             agent = self._is_agent(principal)
-            out = self._propose(principal, capability, arguments, "PROPOSED_BY_AGENT" if agent else "PROPOSED", {})
+            out = self._propose(principal, capability, arguments, "PROPOSED_BY_AGENT" if agent else "PROPOSED", {}, items)
             if out["ok"]:
                 out["message"] = "Confirmation required; nothing was executed."
             return out
         return self._execute(principal, capability, arguments)
 
-    def propose(self, agent: str, capability: str, arguments: dict | None = None) -> dict:
+    def propose(self, agent: str, capability: str, arguments: dict | None = None, *,
+                items: list | None = None) -> dict:
         """An AGENT proposes a gated action for a human to confirm. Nothing runs here."""
         if not self._is_agent(agent):
-            return self.request(agent, capability, arguments)          # a human uses the normal flow
+            return self.request(agent, capability, arguments, items=items)   # a human uses the normal flow
         arguments, refusal = self._admit(agent, capability, arguments)
+        if refusal:
+            return refusal
+        items, refusal = self._admit_items(agent, capability, items)
         if refusal:
             return refusal
         if not self._append("REQUEST", agent, capability,
@@ -360,11 +439,65 @@ class Engine:
             if not self._append("DENIED", agent, capability, {"reason": "not a gated capability"}):
                 out["warning"] = "refusal_not_recorded"
             return out
+        if cap.heard and items is None:
+            return self._refuse(agent, capability, "items_required")       # the hearing rule: nothing shown, nothing written
         out = self._propose(agent, capability, arguments, "PROPOSED_BY_AGENT",
-                            {"writes": grant.writes, "approvers": sorted(cap.approvers) or "any granted human"})
+                            {"writes": grant.writes, "approvers": sorted(cap.approvers) or "any granted human"}, items)
         if out["ok"]:
             out.update(proposer=agent, message="Proposed by an agent; a human must confirm. Nothing was executed.")
         return out
+
+    # ------------------------------------------------------------------ the hearing rule (0.2.0)
+    def _pending(self, principal: str, token: object, action: str, event: str):
+        """The stored proposal a show, hear or correct may act on, or (None, refusal)."""
+        if name_problem(principal):
+            return None, self._refuse_confirm(principal, token, "bad_principal", action, event=event)
+        if type(token) is not str or not TOKEN_SHAPE.fullmatch(token):
+            return None, self._refuse_confirm(principal, token, "unknown_token", action, event=event)
+        try:
+            rec = self._store(self.tokens.get, token)
+        except _StoreUnavailable:
+            return None, self._refuse_confirm(principal, token, "token_store_unavailable", action, event=event)
+        if rec is None:
+            return None, self._refuse_confirm(principal, token, "unknown_token", action, event=event)
+        if not rec["readable"]:
+            return None, self._refuse_confirm(principal, token, "corrupt_stored_row", action, event=event)
+        if rec["state"] in ("used", "running"):
+            return None, self._refuse_confirm(principal, token, "already_used", action, event=event)
+        if rec["state"] == "expired":
+            return None, self._refuse_confirm(principal, token, "expired", action, event=event)
+        if rec["items"] is None:
+            return None, self._refuse_confirm(principal, token, "items_required", action, event=event)
+        return rec, None
+
+    def show(self, principal: str, token: str, text: str, *, channel: str = "spoken") -> dict:
+        """The product says what the human got: the exact `text`, by `channel` (spoken, screen or card). Refused unless
+        every item of the proposal is in that text (`item_problem`). Recorded as SHOWN with the text's SHA-256, its
+        length and the channel; the text itself only when the engine was built with `record_shown_text=True`, and
+        then only up to SHOWN_TEXT_MAX_CHARS (a longer one leaves a 512-character preview)."""
+        rec, refusal = self._pending(principal, token, "show", "SHOW_REFUSED")
+        if refusal:
+            return refusal
+        if type(text) is not str or not text.strip():
+            return self._refuse_confirm(principal, token, "bad_text", "show", event="SHOW_REFUSED")
+        if len(text) > SHOWN_TEXT_LIMIT:
+            return self._refuse_confirm(principal, token, "text_too_large", "show", event="SHOW_REFUSED")
+        if channel not in SHOW_CHANNELS:
+            return self._refuse_confirm(principal, token, "bad_channel", "show", event="SHOW_REFUSED")
+        for item in rec["items"]:
+            why = item_problem(item, text, channel)
+            if why:
+                return self._refuse_confirm(principal, token, why, action="show", event="SHOW_REFUSED", key=item["key"])
+        digest = sha(text.encode("utf-8"))
+        payload = {"token": token, "items_hash": rec["items_hash"], "text_sha256": digest, "chars": len(text), "channel": channel}
+        if self.record_shown_text:
+            if len(text) <= SHOWN_TEXT_MAX_CHARS:
+                payload["text"] = text
+            else:
+                payload["text_preview"] = text[:PREVIEW_BYTES]
+        if not self._append("SHOWN", principal, rec["capability"], payload):
+            return {"ok": False, "state": "not_shown", "error": "audit_write_failed"}
+        return {"ok": True, "state": "shown", "token": token, "items_hash": rec["items_hash"], "text_sha256": digest}
 
     def _human_may_confirm(self, human: str, proposer: str, capability: str) -> str | None:
         if not self._is_agent(proposer):
@@ -407,10 +540,10 @@ class Engine:
         return None if ok else "approver_proof_invalid"
 
     def _refuse_confirm(self, principal: object, token: object, reason: str, action: str = "confirm",
-                        **extra) -> dict:
+                        event: str = "CONFIRM_REFUSED", **extra) -> dict:
         shown = token if isinstance(token, str) and TOKEN_SHAPE.fullmatch(token) else "invalid"
-        out = {"ok": False, "error": reason}
-        if not self._append("CONFIRM_REFUSED", _safe(principal), action, {"token": shown, "reason": reason, **extra}):
+        out = {"ok": False, "error": reason, **({"key": extra["key"]} if "key" in extra else {})}
+        if not self._append(event, _safe(principal), action, {"token": shown, "reason": reason, **extra}):
             out["warning"] = "refusal_not_recorded"
         return out
 
