@@ -529,6 +529,60 @@ class Engine:
             return {"ok": False, "state": "not_heard", "error": "audit_write_failed"}
         return {"ok": True, "state": "heard", "token": token, "items_hash": rec["items_hash"], "heard_seq": seq}
 
+    def correct(self, principal: str, token: str, key: str, value: object, *, said: str | None = None) -> dict:
+        """The human changed one item before the yes ("no, two point five million"): a NEW proposal with that item's
+        value (and said form) changed and everything else the same, which must be shown and heard again; the old
+        token is withdrawn and linked to the new one (WITHDRAWN.new_token). Refused for an item the proposal does not
+        hold (`unknown_item`), a value the store cannot hold, or a token that is used, running or expired."""
+        rec, refusal = self._pending(principal, token, "correct", "CORRECT_REFUSED")
+        if refusal:
+            return refusal
+        named = {"key": key} if name_problem(key) is None else {}
+        items = [dict(it) for it in rec["items"]]
+        hits = [it for it in items if it.get("key") == key]
+        if not hits:
+            return self._refuse_confirm(principal, token, "unknown_item", action="correct", event="CORRECT_REFUSED", **named)
+        for it in hits:
+            it["value"] = value
+            if said is None:
+                it.pop("said", None)                   # the old words no longer fit the new value
+            else:
+                it["said"] = said
+        try:
+            text = items_text(items)
+        except ConfigError:
+            return self._refuse_confirm(principal, token, "items_not_storable", action="correct", event="CORRECT_REFUSED", **named)
+        if len(text.encode("utf-8")) > ARGUMENTS_MAX_BYTES:
+            return self._refuse_confirm(principal, token, "items_too_large", action="correct", event="CORRECT_REFUSED", **named)
+        try:
+            new = self._store(self.tokens.revise, token, json.loads(text), principal=rec["principal"])
+        except _StoreUnavailable:
+            return self._refuse_confirm(principal, token, "token_store_unavailable", action="correct", event="CORRECT_REFUSED")
+        if new is None:                                  # confirmed or expired between the read and the revision
+            return self._refuse_confirm(principal, token, "already_used", action="correct", event="CORRECT_REFUSED")
+        new_rec = self.tokens.get(new)
+        if not self._append("WITHDRAWN", principal, rec["capability"], {"token": token, "reason": "corrected", "new_token": new, **named}):
+            try:
+                self.tokens.withdraw(new)                # the new proposal has no record: it must not run; the old stands
+            except Exception:  # noqa: BLE001
+                pass
+            return {"ok": False, "state": "not_run", "error": "audit_write_failed"}
+        try:
+            self.tokens.withdraw(token)                  # the old proposal is off the table from here
+        except Exception:  # noqa: BLE001 - it expires on its own; WITHDRAWN is on the record
+            pass
+        event = "PROPOSED_BY_AGENT" if self._is_agent(rec["principal"]) else "PROPOSED"
+        if not self._append(event, rec["principal"], rec["capability"],
+                            {"token": new, "ttl_seconds": self.tokens.ttl, "arguments_hash": new_rec["integrity"],
+                             "items_hash": new_rec["items_hash"], "corrected_from": token}):
+            try:
+                self.tokens.withdraw(new)
+            except Exception:  # noqa: BLE001
+                pass
+            return {"ok": False, "state": "not_run", "error": "audit_write_failed", "warning": "old_token_withdrawn"}
+        return {"ok": True, "state": "proposed", "token": new, "items_hash": new_rec["items_hash"], "corrected_from": token,
+                "message": "Corrected; the new proposal must be shown and heard again. Nothing was executed."}
+
     def why(self, token: object) -> str:
         """One plain line for "why didn't it run": the last thing the log says about this token."""
         if type(token) is not str or not TOKEN_SHAPE.fullmatch(token):

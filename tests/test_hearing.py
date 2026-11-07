@@ -313,5 +313,74 @@ class HeardTest(unittest.TestCase):
         self.assertEqual([r["token"] for r in later.unheard_runs()], [token])                        # the heard run is not listed
 
 
+class CorrectTest(unittest.TestCase):
+    def heard(self, eng):
+        token = eng.request("agent", "pay.send", {"to": "bob@example.com"}, items=ITEMS)["token"]
+        self.assertTrue(eng.show("siya", token, TEXT, channel="spoken")["ok"])
+        self.assertTrue(eng.hear("siya", token, channel="spoken")["ok"])
+        return token
+
+    def test_a_correction_is_a_new_token_and_the_old_one_is_withdrawn(self):
+        eng, ran = make()
+        old = self.heard(eng)
+        out = eng.correct("siya", old, "amount", 2500000, said="two point five million")
+        self.assertEqual((out["ok"], out["state"]), (True, "proposed"), out)
+        new = out["token"]
+        self.assertNotEqual(new, old)
+        self.assertEqual(out["corrected_from"], old)
+        self.assertEqual(eng.tokens.get(old)["state"], "expired")
+        withdrawn = events(eng, "WITHDRAWN")[-1]["payload"]
+        self.assertEqual((withdrawn["token"], withdrawn["reason"], withdrawn["new_token"]), (old, "corrected", new))
+        proposed = events(eng, "PROPOSED_BY_AGENT")[-1]["payload"]
+        self.assertEqual((proposed["token"], proposed["corrected_from"], proposed["items_hash"]), (new, old, out["items_hash"]))
+        self.assertEqual(eng.confirm("alice", old)["error"], "expired")
+        self.assertEqual(eng.confirm("alice", new)["error"], "unheard")                  # the new items must be shown and heard
+        self.assertEqual(ran, [])
+        text = "I'll pay bob at example dot com two point five million. Right?"
+        self.assertEqual(eng.show("siya", new, TEXT, channel="spoken")["error"], "item_not_in_text")   # the old words no longer fit
+        self.assertTrue(eng.show("siya", new, text, channel="spoken")["ok"])
+        self.assertTrue(eng.hear("siya", new, channel="spoken")["ok"])
+        self.assertEqual(eng.confirm("alice", new)["state"], "executed")
+        self.assertEqual(len(ran), 1)
+        self.assertEqual(events(eng, "EXECUTING")[-1]["payload"]["items_hash"], out["items_hash"])
+        self.assertTrue(eng.audit.verify()["ok"])
+
+    def test_a_correction_keeps_the_other_items_and_the_arguments(self):
+        eng, _ = make()
+        old = self.heard(eng)
+        new = eng.correct("siya", old, "amount", 2500000, said="two point five million")["token"]
+        o, n = eng.tokens.get(old), eng.tokens.get(new)
+        self.assertEqual((n["principal"], n["capability"], n["arguments"], n["integrity"]),
+                         (o["principal"], o["capability"], o["arguments"], o["integrity"]))
+        self.assertEqual(n["items"][0], ITEMS[0])
+        self.assertEqual(n["items"][1], {"key": "amount", "value": 2500000, "said": "two point five million", "label": "Amount"})
+        again = eng.correct("siya", new, "amount", 2600000)["token"]                     # no said given: the old said is dropped
+        self.assertNotIn("said", eng.tokens.get(again)["items"][1])
+
+    def test_a_correction_needs_a_known_item_and_a_storable_value(self):
+        eng, _ = make()
+        old = self.heard(eng)
+        out = eng.correct("siya", old, "colour", "blue")
+        self.assertEqual((out["error"], out["key"]), ("unknown_item", "colour"))
+        self.assertEqual(eng.correct("siya", old, "amount", float("nan"))["error"], "items_not_storable")
+        self.assertEqual(eng.correct("siya", old, "amount", "x" * 9000)["error"], "items_too_large")
+        self.assertEqual(events(eng, "WITHDRAWN"), [])
+        self.assertEqual(eng.tokens.get(old)["state"], "proposed")
+        self.assertEqual(events(eng, "CORRECT_REFUSED")[-1]["payload"]["reason"], "items_too_large")
+
+    def test_after_the_yes_nothing_moves(self):
+        eng, _ = make()
+        old = self.heard(eng)
+        self.assertTrue(eng.confirm("alice", old)["ok"])
+        for call in (lambda: eng.correct("siya", old, "amount", 1),
+                     lambda: eng.show("siya", old, TEXT, channel="spoken"),
+                     lambda: eng.hear("siya", old, channel="spoken")):
+            self.assertEqual(call()["error"], "already_used")
+        self.assertEqual(len(events(eng, "PROPOSED_BY_AGENT")), 1)
+        self.assertEqual(eng.correct("siya", "tok_" + "0" * 32, "amount", 1)["error"], "unknown_token")
+        plain = eng.request("alice", "email.send", {"to": "bob@example.com"})["token"]
+        self.assertEqual(eng.correct("siya", plain, "to", "x")["error"], "items_required")
+
+
 if __name__ == "__main__":
     unittest.main()
