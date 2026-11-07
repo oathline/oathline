@@ -71,13 +71,13 @@ What it does not protect against is listed in full [further down](#what-oathline
 
 Standard library only. Python 3.10+.
 
-The whole `oathline/` package is 1944 lines of Python in 6 files. Count them yourself from the repository root:
+The whole `oathline/` package is 1961 lines of Python in 6 files. Count them yourself from the repository root:
 
 ```bash
 python -c "import glob; print(sum(1 for f in glob.glob('oathline/*.py') for _ in open(f, encoding='utf-8')))"
 ```
 
-The repository has 317 tests. `python -m unittest discover -s tests` runs them and prints the count.
+The repository has 318 tests. `python -m unittest discover -s tests` runs them and prints the count.
 
 An earlier version of Oathline Core recorded 233 events in its hash-chained audit log during one internal job for our own company (30 Sep to 2 Oct 2026).
 The job's audit logs are private, so this can't be checked from this repository.
@@ -253,7 +253,7 @@ python -m unittest discover -s tests
 ```
 
 The example shows a read running, a write waiting for a human, and the audit log proving it.
-The 317 tests need no network.
+The 318 tests need no network.
 
 The same flow in your own code. This block runs as written; the stand-ins at the top
 (`user_text`, `model_output`, `send_email`, `show_to_a_human`) are where your app plugs in:
@@ -302,7 +302,7 @@ The principles behind them are in [CONSTITUTION.md](https://github.com/oathline/
 |---|---|---|
 | **Constitution** (policy) | `oathline.capabilities`, `oathline.validator` | The frozen allowlist of capabilities and grants (`Capability`, `Registry`, `authorize()`), plus `validate()`, the pure, deterministic filter for model output |
 | **Approvals** | `oathline.engine` | `Engine`: request -> authorize -> propose -> human confirm -> execute -> verify, all audited; a principal on the non-human list can't confirm, and with an `approver_check` set `confirm()` also needs a proof. Agents can `propose()` a gated action; it is confirmed under a human's name (a named `approver`, or a human granted the capability), and it then runs once as the agent's action on that human's authority |
-| **Tokens** | `oathline.tokens` | `TokenStore`: propose/confirm with TTL (30-3600 s), integrity hash and single use |
+| **Tokens** | `oathline.tokens` | `TokenStore`: propose/confirm with TTL (30 s to 30 days), integrity hash and single use |
 | **Audit** | `oathline.audit` | `AuditLog`: append-only SQLite hash chain with `verify(expected_head=...)` |
 
 ## Agent proposes, human confirms
@@ -425,8 +425,10 @@ print(engine.confirm("alice", p["token"])["state"])                             
 - **Yes to exactly that.** `confirm()` refuses `unheard` (no hearing) and `stale_hearing` (the hearing names
   other items than the proposal holds now). A correction before the yes, `correct(principal, token, key,
   value)`, is a new proposal with its words rendered again, which must be shown and heard again; the old token
-  is withdrawn and the two are linked in the log. A proposal past its lifetime is dead: nothing shows, hears,
-  corrects or confirms it.
+  is withdrawn and the two are linked in the log. When the corrected key is also one of the proposal's arguments,
+  the new proposal's argument carries the new value (its `arguments_hash` is new): the words the human heard and
+  the action that runs are one value. A proposal past its lifetime is dead: nothing shows, hears, corrects or
+  confirms it.
 - **Recorded.** `SHOWN`, `HEARD`, the yes with the hearing it relied on (`CONFIRMED` carries `items_hash`,
   `heard_seq` and `text_sha256`) and the run (`EXECUTING` carries `items_hash`) are in one chain.
   `engine.why(token)` says in one line why a token did not run; `engine.unheard_runs()` lists runs of a
@@ -562,7 +564,7 @@ tokens that ran more than once.
 **Files and lifetimes.** `Engine(registry, audit=AuditLog("audit.db"), tokens=TokenStore("tokens.db", ttl_seconds=300))`
 keeps the log and the tokens in SQLite files; the two may be one file or two. `engine.close()` closes both.
 `ttl_seconds` is a token's
-lifetime, 30 to 3600. `Engine(registry, verifier=fn)` calls `fn(capability, result)` after each run that
+lifetime, 30 seconds to 30 days (2,592,000): a proposal shown on a card may wait days for the human's yes. `Engine(registry, verifier=fn)` calls `fn(capability, result)` after each run that
 succeeded and records its `True` or `False`. It is not called after a run that failed. If its verdict
 cannot be written to the log, the result carries `warning: verification_not_recorded`.
 

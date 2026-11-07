@@ -598,9 +598,11 @@ class Engine:
     def correct(self, principal: str, token: str, key: str, value: object) -> dict:
         """The human changed one item before the yes ("no, two point five million"): a NEW proposal with that item's
         value changed, its words rendered again by Core, and everything else the same, which must be shown and heard
-        again; the old token is withdrawn and linked to the new one (WITHDRAWN.new_token). Refused for an item the
-        proposal does not hold (`unknown_item`), a value the store cannot hold or render, or a token that is used,
-        running or expired."""
+        again; the old token is withdrawn and linked to the new one (WITHDRAWN.new_token). When the item's key is also
+        one of the proposal's ARGUMENTS, the new proposal's argument carries the new value too (hole 6, 8 Nov: the
+        words the human heard and the action that runs must be the same value), so its `arguments_hash` is new.
+        Refused for an item the proposal does not hold (`unknown_item`), a value the store cannot hold or render, or a
+        token that is used, running or expired."""
         rec, refusal = self._pending(principal, token, "correct", "CORRECT_REFUSED")
         if refusal:
             return refusal
@@ -621,8 +623,18 @@ class Engine:
             return self._refuse_confirm(principal, token, "items_not_storable", action="correct", event="CORRECT_REFUSED", **named)
         if len(text.encode("utf-8")) > ARGUMENTS_MAX_BYTES:
             return self._refuse_confirm(principal, token, "items_too_large", action="correct", event="CORRECT_REFUSED", **named)
+        arguments = None
+        if isinstance(rec["arguments"], dict) and key in rec["arguments"]:   # the item is an argument: the action changes with it
+            arguments = dict(rec["arguments"])
+            arguments[key] = value
+            try:
+                args_text = arguments_text(arguments)
+            except ConfigError:
+                return self._refuse_confirm(principal, token, "arguments_not_storable", action="correct", event="CORRECT_REFUSED", **named)
+            if len(args_text.encode("utf-8")) > ARGUMENTS_MAX_BYTES:
+                return self._refuse_confirm(principal, token, "arguments_too_large", action="correct", event="CORRECT_REFUSED", **named)
         try:
-            new = self._store(self.tokens.revise, token, json.loads(text), principal=rec["principal"])
+            new = self._store(self.tokens.revise, token, json.loads(text), principal=rec["principal"], arguments=arguments)
         except _StoreUnavailable:
             return self._refuse_confirm(principal, token, "token_store_unavailable", action="correct", event="CORRECT_REFUSED")
         if new is None:                                  # confirmed or expired between the read and the revision

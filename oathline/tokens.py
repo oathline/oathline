@@ -61,7 +61,7 @@ from typing import Callable
 
 from .capabilities import name_problem
 
-TTL_MIN, TTL_MAX = 30, 3600
+TTL_MIN, TTL_MAX = 30, 30 * 86400   # a lifetime from 30 s to 30 days: a card shown to a human may wait days for the yes (0.2.0)
 STATES = ("proposed", "used", "running", "expired")   # used: confirmed, nothing run yet; running: the action started
 ITEM_SHOWINGS = ("spoken", "screen", "kept", "preset")   # how an item reaches the human (0.2.0); spoken is the default
 ITEM_TEXT_FIELDS = ("said", "label", "kind", "shown_as", "whole_word")
@@ -234,9 +234,10 @@ class TokenStore:
         self._db.commit()
         return tid
 
-    def revise(self, token: str, items: list, *, principal: str) -> str | None:
-        """0.2.0: a NEW proposal with new items and the same principal, capability and arguments as `token`, which
-        must be this principal's and still `proposed`. The old proposal is left as it is: the engine withdraws it
+    def revise(self, token: str, items: list, *, principal: str, arguments: dict | None = None) -> str | None:
+        """0.2.0: a NEW proposal with new items and the same principal and capability as `token`, which must be this
+        principal's and still `proposed`; the same arguments, or `arguments` when the correction changed one of them
+        (then the integrity hash is the new arguments'). The old proposal is left as it is: the engine withdraws it
         once the new one is on the record. The new token id, or None when there is nothing to revise."""
         if type(token) is not str or type(principal) is not str:
             return None
@@ -245,10 +246,14 @@ class TokenStore:
                              " FROM proposals WHERE id=?", (token,)).fetchone()
         if not r or _row_arguments(*r) is None or r[0] != principal or r[3] != "proposed":
             return None
+        args_text, integrity = r[2], r[6]
+        if arguments is not None:                     # the corrected item is an argument too: the action itself changes
+            args_text = arguments_text(arguments)
+            integrity = _integrity(r[0], r[1], json.loads(args_text))
         now = self._now()
         if now is None:
             return None
-        return self._insert(r[0], r[1], r[2], r[6], items_s, now)
+        return self._insert(r[0], r[1], args_text, integrity, items_s, now)
 
     def get(self, token: str) -> dict | None:
         if not isinstance(token, str):

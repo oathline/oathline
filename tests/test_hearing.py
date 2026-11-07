@@ -360,6 +360,30 @@ class CorrectTest(unittest.TestCase):
         self.assertEqual(events(eng, "EXECUTING")[-1]["payload"]["items_hash"], out["items_hash"])
         self.assertTrue(eng.audit.verify()["ok"])
 
+    def test_a_corrected_item_that_is_also_an_argument_runs_corrected(self):
+        """Hole 6 (8 Nov): `to` is an item AND an argument. Before, correct() revised the item only, so the human heard the new
+        address, said yes, and the OLD address ran. Now the new proposal's arguments carry the corrected value too."""
+        eng, ran = make()
+        old = self.heard(eng)
+        out = eng.correct("siya", old, "to", "carol@example.com")
+        self.assertTrue(out["ok"], out)
+        new = out["token"]
+        o, n = eng.tokens.get(old), eng.tokens.get(new)
+        self.assertEqual(n["arguments"], {"to": "carol@example.com"})                 # the argument moved with the item
+        self.assertNotEqual(n["integrity"], o["integrity"])                             # so the action's hash is a new one
+        self.assertEqual(events(eng, "PROPOSED_BY_AGENT")[-1]["payload"]["arguments_hash"], n["integrity"])
+        self.assertEqual(eng.action(new)["arguments_hash"], n["integrity"])
+        said = words("to", "carol@example.com")                                         # rendered again by Core, through the renderer
+        self.assertEqual(n["items"][0], {"key": "to", "value": "carol@example.com", "said": said, "label": "To"})
+        self.assertEqual(n["items"][1], dict(ITEMS[1], said="two point four million"))   # the other item untouched
+        text = f"I'll pay {said} two point four million. Right?"
+        self.assertTrue(eng.show("siya", new, text, channel="spoken")["ok"])
+        self.assertTrue(eng.hear("siya", new, channel="spoken")["ok"])
+        self.assertEqual(eng.confirm("alice", new)["state"], "executed")
+        self.assertEqual([(c, a["to"]) for c, a in ran], [("pay.send", "carol@example.com")])   # the corrected value ran, once
+        self.assertEqual(events(eng, "EXECUTING")[-1]["payload"]["arguments_hash"], n["integrity"])
+        self.assertTrue(eng.audit.verify()["ok"])
+
     def test_a_correction_keeps_the_other_items_and_the_arguments(self):
         eng, _ = make()
         old = self.heard(eng)

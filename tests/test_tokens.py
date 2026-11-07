@@ -42,9 +42,11 @@ class TokenTest(unittest.TestCase):
         self.assertEqual(self.s.confirm("agent", t).error, "tampered")
 
     def test_ttl_bounds(self):
-        for bad in (0, 29, 3601, 30.5, "300"):
+        for bad in (0, 29, 30 * 86400 + 1, 30.5, "300"):
             with self.assertRaises(ConfigError):
                 TokenStore(ttl_seconds=bad)  # type: ignore[arg-type]
+        for ok in (30, 3600, 7 * 86400, 30 * 86400):          # a card's yes can be days after the showing (hole 7, 8 Nov)
+            TokenStore(ttl_seconds=ok).close()
 
 
 if __name__ == "__main__":
