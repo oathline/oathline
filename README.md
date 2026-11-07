@@ -77,7 +77,7 @@ The whole `oathline/` package is 1821 lines of Python in 6 files. Count them you
 python -c "import glob; print(sum(1 for f in glob.glob('oathline/*.py') for _ in open(f, encoding='utf-8')))"
 ```
 
-The repository has 289 tests. `python -m unittest discover -s tests` runs them and prints the count.
+The repository has 293 tests. `python -m unittest discover -s tests` runs them and prints the count.
 
 An earlier version of Oathline Core recorded 233 events in its hash-chained audit log during one internal job for our own company (30 Sep to 2 Oct 2026).
 The job's audit logs are private, so this can't be checked from this repository.
@@ -253,7 +253,7 @@ python -m unittest discover -s tests
 ```
 
 The example shows a read running, a write waiting for a human, and the audit log proving it.
-The 289 tests need no network.
+The 293 tests need no network.
 
 The same flow in your own code. This block runs as written; the stand-ins at the top
 (`user_text`, `model_output`, `send_email`, `show_to_a_human`) are where your app plugs in:
