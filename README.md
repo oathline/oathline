@@ -420,11 +420,13 @@ print(engine.confirm("alice", p["token"])["state"])                             
   when the engine is built with `record_shown_text=True`, up to 4,096 characters: a governance log is private
   by default.
 - **Heard.** `hear(principal, token, channel=)` is the product's statement that the human had the shown text
-  (spoken to the end, the card delivered). One hearing per showing.
+  (spoken to the end, the card delivered). One hearing per showing. Only the registered product may make it,
+  and a `HEARD` written into the log under any other name is not a hearing.
 - **Yes to exactly that.** `confirm()` refuses `unheard` (no hearing) and `stale_hearing` (the hearing names
   other items than the proposal holds now). A correction before the yes, `correct(principal, token, key,
-  value, said=)`, is a new proposal that must be shown and heard again; the old token is withdrawn and the two
-  are linked in the log.
+  value)`, is a new proposal with its words rendered again, which must be shown and heard again; the old token
+  is withdrawn and the two are linked in the log. A proposal past its lifetime is dead: nothing shows, hears,
+  corrects or confirms it.
 - **Recorded.** `SHOWN`, `HEARD`, the yes with the hearing it relied on (`CONFIRMED` carries `items_hash`,
   `heard_seq` and `text_sha256`) and the run (`EXECUTING` carries `items_hash`) are in one chain.
   `engine.why(token)` says in one line why a token did not run; `engine.unheard_runs()` lists runs of a
@@ -739,8 +741,11 @@ see [SECURITY.md](https://github.com/oathline/oathline/blob/main/SECURITY.md).
 - A correction the product fails to take (the person says "no, two point five" and the product hears a yes)
   is a wrong value proposed with the person's consent. The log records that they heard it and said yes; only
   the product's own vocabulary catches that.
-- An item's `said` form is the product's. Where a product cannot supply one, the item must be declared for
-  the screen and shown there; the rule's public wording is then "nothing is written unheard or unseen".
+- An item's words are the renderer's that the product registered. Where no renderer fits a value, the item
+  must be declared for the screen and shown there; the rule's public wording is then "nothing is written
+  unheard or unseen".
+- Finding a token's showing or hearing reads the audit log from the start (linear in its length, like
+  `unfinished()` and `mismatched_runs()`). Fine at this release's sizes; an index by token is for a later one.
 
 ## Next
 

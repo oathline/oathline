@@ -31,12 +31,15 @@ protect against" lists them. Rule 8 is a rule for how you deploy it: nothing in 
    in its own process.
 
 9. **Nothing is written unheard.** A capability that declares `heard=True` runs only after the human was SHOWN exactly
-   what will be written, in words they can check; HEARD it (the product says the text was spoken to the end or the card
-   was delivered); said YES TO EXACTLY THAT (the items as they stand at the moment of the yes, not as they stood when
-   shown: a change after the showing is a new proposal, shown again); and all of it is RECORDED in the same chain as
-   the run. The package checks the words against the items (`show`), keeps the hearing (`hear`), and refuses a yes with
-   no hearing or a hearing of other items (`confirm`). It cannot know the person listened: heard is not understood.
-   A capability that does not declare it is governed by rules 4 to 7 as before.
+   what will be written, in words the package rendered itself from the values (the proposer never supplies them);
+   HEARD it (only the capability's registered product actor may say the text was spoken to the end or the card was
+   delivered; a model actor never can, and a showing or hearing written into the log by anyone else counts for
+   nothing); said YES TO EXACTLY THAT (the items as they stand at the moment of the yes, in those words, on that
+   channel: a change after the showing is a new proposal, shown again, and a proposal past its lifetime is dead); and
+   all of it is RECORDED in the same chain as the run. The package checks the words against the items (`show`), keeps
+   the hearing (`hear`), and refuses a yes with no hearing or a hearing of other items (`confirm`). It cannot know the
+   person listened: heard is not understood. A capability that does not declare it is governed by rules 4 to 7 as
+   before.
 
 What the constitution does not cover: authenticating people, and what your executors do once they are allowed to run.
 See the README's "What Oathline does not protect against".
