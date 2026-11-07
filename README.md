@@ -442,8 +442,11 @@ capability only, and must name the product actors that may show and hear it (nev
 `request()` and `propose()` is a non-empty list of `{key, value}` dicts; optional `label`, `kind`, `shown_as`
 (`spoken`, `screen`, `kept`, `preset`) and `whole_word`, all text; the same JSON and size rules as the
 arguments. The words an item is said in (`said`) are Core's: `engine.register_renderer(capability, fn)` with
-`fn(key, value) -> str`, else the value as text; an item that arrives with a `said` is refused. The items hash
-covers key, value, said, kind and shown_as. `Engine(..., record_shown_text=True)` keeps shown texts in the log; the default keeps their
+`fn(key, value) -> str`, else the value as text; an item that arrives with a `said` is refused. A `whole_word`
+is one of Core's (`everyone`, `everybody`, `all of them`, `all of you`, `the whole crew`, `the whole team`, `the
+lot`, `all present`). A `screen`, `kept` or `preset` showing is allowed only for keys the capability declares in
+`screen_keys`, `kept_keys` or `preset_keys`. The items hash covers key, value, said, kind, shown_as, label and
+whole_word. `Engine(..., record_shown_text=True)` keeps shown texts in the log; the default keeps their
 hashes. `show()`, `hear()` and `correct()` return `state` `shown`, `heard` or `proposed` (a new token) on
 success, and a refusal code from the table below otherwise; a refusal names the item in `key` where there is
 one.

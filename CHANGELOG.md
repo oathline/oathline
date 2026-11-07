@@ -54,6 +54,10 @@ The hearing rule: nothing is written unheard. Opt-in by capability; everything o
   token is withdrawn and linked (`WITHDRAWN` with `new_token`; the new `PROPOSED` names `corrected_from`).
 - A proposal past its lifetime is dead: `TokenStore.expire_if_due` marks it expired the moment a showing, a
   hearing, a correction or a confirmation reaches it (`expired`); a hearing dies with its proposal.
+- The proposer chooses neither the word a list hides behind nor how an item is shown: `whole_word` must be one of
+  Core's (`everyone`, `everybody`, `all of them`, `all of you`, `the whole crew`, `the whole team`, `the lot`,
+  `all present`; `whole_word_not_allowed` otherwise), and a `screen`, `kept` or `preset` showing is allowed only for
+  keys the capability declares in `screen_keys`, `kept_keys` or `preset_keys` (`showing_not_declared` otherwise).
 - `Engine.why(token)`: one plain line for "why didn't it run". `Engine.unheard_runs()`: runs of a capability
   declared heard now with no hearing of their items before them (a run from before the flag was set shows up).
 - `appears_verbatim` is exported. New event types: `SHOWN`, `SHOW_REFUSED`, `HEARD`, `HEAR_REFUSED`,
@@ -61,7 +65,7 @@ The hearing rule: nothing is written unheard. Opt-in by capability; everything o
   unchanged (1): a 0.1.2 log verifies under 0.2.0 and a 0.2.0 log under 0.1.2.
 - Finding a token's showing or hearing walks the audit log (linear in its length; `unheard_runs()` and
   `mismatched_runs()` always did). Fine at this release's sizes; an index by token is for a later one.
-- 64 new tests (tests/test_hearing.py, test_items.py, test_hearing_hardening.py, test_hearing_conformance.py):
+- 67 new tests (tests/test_hearing.py, test_items.py, test_hearing_hardening.py, test_hearing_conformance.py):
   the rule, its refusals, a locked log at show / hear / correct, a crash between the hearing and the yes, 4,000
   random shapes through the four calls, a correction racing twelve confirmations, and a scripted product whose
   log is read with the two counters a grader would use (unheard presses, unnamed marks: 0 / 0). The rows are in
