@@ -746,6 +746,9 @@ see [SECURITY.md](https://github.com/oathline/oathline/blob/main/SECURITY.md).
 - A correction the product fails to take (the person says "no, two point five" and the product hears a yes)
   is a wrong value proposed with the person's consent. The log records that they heard it and said yes; only
   the product's own vocabulary catches that.
+- The whole word is the product's claim that the list is complete. Core knows the names in the item, not
+  the roster they came from: a list of three of five names proposed under `everyone` is heard as "everyone"
+  and three are written. That is an under-write (nobody is ticked unheard), and only the product can see it.
 - An item's words are the renderer's that the product registered. Where no renderer fits a value, the item
   must be declared for the screen and shown there; the rule's public wording is then "nothing is written
   unheard or unseen".
