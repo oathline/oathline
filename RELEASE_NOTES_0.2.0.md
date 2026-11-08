@@ -55,12 +55,8 @@ python -m pip install oathline==0.2.0
 python -c "import oathline; print(oathline.__version__)"
 ```
 
-Artefact checksums (SHA-256, from the files attached to this release):
-
-```
-oathline-0.2.0.tar.gz            <filled at release from the built artefact>
-oathline-0.2.0-py3-none-any.whl  <filled at release from the built artefact>
-```
+The SHA-256 of each file attached to this release (`oathline-0.2.0.tar.gz`, `oathline-0.2.0-py3-none-any.whl`) is
+on the GitHub release page (SHA256SUMS). These notes are the release page's and are not shipped in the package.
 
 Full change list: `CHANGELOG.md`. Try it in ten lines: the top of the README. Try it in sixty:
 `python examples/stop_the_delete.py`.

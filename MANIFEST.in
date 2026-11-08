@@ -3,3 +3,4 @@ prune docs
 prune examples
 prune .github
 exclude ATTACKS.md CHANGELOG.md CONSTITUTION.md CONTRIBUTING.md SECURITY.md .gitignore MANIFEST.in
+exclude RELEASE_NOTES_0.2.0.md
