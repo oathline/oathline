@@ -8,7 +8,7 @@
 **Oathline: an AI agent's yes means exactly what the person saw or heard.**
 
 **The problem.** In April 2026 a coding agent deleted a production database and its backups in 9 seconds, using a token it found, with no approval step ([news report](https://www.gigazine.net/gsc_news/en/20260427-ai-coding-agent-deleted-database/)).
-Where an approval step exists, the Approve click proves nothing about what the person was shown: the record keeps the click, not the words, and the words on the card were the agent's own.
+Where an approval step exists, the Approve click proves nothing about what the person was shown: the record keeps the click, not the words, and the words on the card are often the agent's own.
 Oathline binds the yes to the exact action AND to the exact words the person was shown, renders those words itself, runs the action once, and writes every step to one hash-chained log.
 
 **Install:** `python -m pip install oathline` (standard library only, Python 3.10 or newer)
@@ -44,7 +44,7 @@ The longer version, `python examples/stop_the_delete.py`, adds the two cases tha
 | The yes is bound to the exact arguments by a hash | up to the app | not its job | the two we checked bind it to the call id (1) | yes: the token's integrity hash |
 | The yes is bound to what the person was shown | no | no | not stated (1) | yes: `show`, `hear`; `confirm` refuses `unheard` and `stale_hearing` |
 | Who writes the words the person sees | the agent or the app | nobody; the call is policed, not shown | the application | Oathline renders them; a text supplied by the proposer is refused |
-| Spoken approvals (a voice read-back) | no | no | no | yes: `channel="spoken"`, the words rendered for speech |
+| Spoken approvals (a voice read-back) | not covered | not covered | not covered | yes: `channel="spoken"`, the words rendered for speech |
 | Runs exactly once | up to the app | up to the app | not guaranteed (1) | yes: one token, one run, `EXECUTING` written before the run |
 | Only a human can confirm | up to the app | not its job | up to the app | yes: a model actor can never confirm, under any name on the list |
 | One tamper-evident record of request, showing, hearing, yes and run | no | logs vary | not stated (1) | yes: a hash-chained audit log, `verify()` |
