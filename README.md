@@ -564,7 +564,8 @@ tokens that ran more than once.
 **Files and lifetimes.** `Engine(registry, audit=AuditLog("audit.db"), tokens=TokenStore("tokens.db", ttl_seconds=300))`
 keeps the log and the tokens in SQLite files; the two may be one file or two. `engine.close()` closes both.
 `ttl_seconds` is a token's
-lifetime, 30 seconds to 30 days (2,592,000): a proposal shown on a card may wait days for the human's yes. `Engine(registry, verifier=fn)` calls `fn(capability, result)` after each run that
+lifetime, 30 seconds to 30 days (2,592,000). The default is 300 seconds, as in 0.1.2; only a store built with a longer
+`ttl_seconds` gives long life, for a proposal shown on a card that may wait days for the human's yes. `Engine(registry, verifier=fn)` calls `fn(capability, result)` after each run that
 succeeded and records its `True` or `False`. It is not called after a run that failed. If its verdict
 cannot be written to the log, the result carries `warning: verification_not_recorded`.
 

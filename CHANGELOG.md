@@ -56,7 +56,7 @@ The hearing rule: nothing is written unheard. Opt-in by capability; everything o
   value and its `arguments_hash` is new (`TokenStore.revise(..., arguments=)`): the human never hears one value
   while another runs.
 - A token's lifetime may be up to 30 days (`ttl_seconds` 30 to 2,592,000; it was 30 to 3,600): a proposal shown
-  on a card waits for the human's yes, which can come days later. Nothing else about expiry changes.
+  on a card waits for the human's yes, which can come days later. The default stays 300 seconds; nothing else about expiry changes.
 - A proposal past its lifetime is dead: `TokenStore.expire_if_due` marks it expired the moment a showing, a
   hearing, a correction or a confirmation reaches it (`expired`); a hearing dies with its proposal.
 - The proposer chooses neither the word a list hides behind nor how an item is shown: `whole_word` must be one of
