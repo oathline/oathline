@@ -7,7 +7,7 @@
 
 **Oathline: an AI agent's yes means exactly what the person saw or heard.**
 
-**The problem.** In April 2026 a coding agent deleted a production database and its backups in 9 seconds, using a token it found, with no approval step ([news report](https://www.gigazine.net/gsc_news/en/20260427-ai-coding-agent-deleted-database/)).
+**The problem.** In April 2026 a coding agent deleted a production database and its backups in 9 seconds, using a token it found, with no approval step ([Euronews, 28 April 2026](https://www.euronews.com/2026/04/28/an-ai-agent-deleted-a-companys-entire-database-in-9-seconds-then-wrote-an-apology); [Gigazine, 27 April 2026](https://www.gigazine.net/gsc_news/en/20260427-ai-coding-agent-deleted-database/), which reports the found token).
 Where an approval step exists, the Approve click proves nothing about what the person was shown: the record keeps the click, not the words, and the words on the card are often the agent's own.
 Oathline binds the yes to the exact action AND to the exact words the person was shown, renders those words itself, runs the action once, and writes every step to one hash-chained log.
 
@@ -142,7 +142,7 @@ The job's audit logs are private, so this can't be checked from this repository.
 raw token goes around it, and nothing in this repository stops that. The last two lines of the
 output below show it happening.
 
-In 2026 a coding agent was publicly reported ([news report, 27 April 2026](https://www.gigazine.net/gsc_news/en/20260427-ai-coding-agent-deleted-database/)) to have deleted a production database and its
+In 2026 a coding agent was publicly reported ([Euronews, 28 April 2026](https://www.euronews.com/2026/04/28/an-ai-agent-deleted-a-companys-entire-database-in-9-seconds-then-wrote-an-apology); [Gigazine, 27 April 2026](https://www.gigazine.net/gsc_news/en/20260427-ai-coding-agent-deleted-database/)) to have deleted a production database and its
 backups in 9 seconds, using a token it found, with no confirmation step.
 `examples/nine_seconds.py` replays those moves as a simulation: a scripted stand-in agent
 (no model, no network, a fake token, a fake volume store) whose calls are routed through Oathline.
