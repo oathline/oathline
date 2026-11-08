@@ -75,6 +75,10 @@ The hearing rule: nothing is written unheard. Opt-in by capability; everything o
   random shapes through the four calls, a correction racing twelve confirmations, and a scripted product whose
   log is read with the two counters a grader would use (unheard presses, unnamed marks: 0 / 0). The rows are in
   `ATTACKS.md`; the rule is the Constitution's rule 9.
+- The release kit: the README's first screen (the one line, the problem, ten lines that run, how Oathline differs),
+  `examples/stop_the_delete.py` (an agent asks to drop production; shown, refused unheard, refused after a correction,
+  run once, the log printed; `tests/test_stop_the_delete.py` pins its output), `RELEASE_NOTES_0.2.0.md`, a third issue
+  template ("Show us your use"), `.github/DISCUSSION_CATEGORIES.md` and `.github/GOOD_FIRST_ISSUES.md`.
 - What the rule does not promise, in the README's limits: heard is not understood; `show()` and `hear()` are
   the product's statements and the core cannot see a screen or hear a speaker; a correction the product fails
   to take is a wrong value proposed with the person's consent, on the record as such.

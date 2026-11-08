@@ -1,12 +1,66 @@
 # Oathline
 
+[![PyPI](https://img.shields.io/pypi/v/oathline.svg)](https://pypi.org/project/oathline/)
+[![Tests](https://github.com/oathline/oathline/actions/workflows/tests.yml/badge.svg)](https://github.com/oathline/oathline/actions/workflows/tests.yml)
+[![Licence: MIT](https://img.shields.io/badge/licence-MIT-blue.svg)](https://github.com/oathline/oathline/blob/main/LICENSE)
+[![Python 3.10+](https://img.shields.io/pypi/pyversions/oathline.svg)](https://pypi.org/project/oathline/)
+
+**Oathline: an AI agent's yes means exactly what the person saw or heard.**
+
+**The problem.** In April 2026 a coding agent deleted a production database and its backups in 9 seconds, using a token it found, with no approval step ([news report](https://www.gigazine.net/gsc_news/en/20260427-ai-coding-agent-deleted-database/)).
+Where an approval step exists, the Approve click proves nothing about what the person was shown: the record keeps the click, not the words, and the words on the card were the agent's own.
+Oathline binds the yes to the exact action AND to the exact words the person was shown, renders those words itself, runs the action once, and writes every step to one hash-chained log.
+
+**Install:** `python -m pip install oathline` (standard library only, Python 3.10 or newer)
+
+**Ten lines that show it** (the test `tests/test_readme_top.py` runs this block exactly as printed):
+
+```python
+from oathline import Capability, Engine, Registry
+cap = Capability("db.drop", frozenset({"agent", "dana"}), writes=True, needs_confirmation=True, heard=True, products=frozenset({"console"}))
+engine = Engine(Registry([cap]))
+engine.register("db.drop", lambda a: {"dropped": a["name"]})
+p = engine.request("agent", "db.drop", {"name": "prod-db"}, items=[{"key": "name", "value": "prod-db", "label": "Database"}])
+print("the agent's own yes:", engine.confirm("agent", p["token"])["error"])
+print("a yes before anything was shown:", engine.confirm("dana", p["token"])["error"])
+engine.show("console", p["token"], "Drop the database prod-db? Approve or reject.", channel="card"); engine.hear("console", p["token"], channel="card")
+print("a yes to exactly that:", engine.confirm("dana", p["token"])["state"], "| audit chain ok:", engine.audit.verify()["ok"])
+```
+
+Expected output:
+
+```
+the agent's own yes: non_human_principal
+a yes before anything was shown: unheard
+a yes to exactly that: executed | audit chain ok: True
+```
+
+The longer version, `python examples/stop_the_delete.py`, adds the two cases that matter: a yes to an action that changed after it was shown is refused, and the same yes a second time is refused.
+
+**How Oathline differs.** Most approval mechanisms sit at one of three places. None of them, as a category, says what the person saw.
+
+| | An Approve button in the app | A gateway's policies and allow-lists | An agent SDK's approval hook | Oathline |
+|---|---|---|---|---|
+| The yes is bound to the exact arguments by a hash | up to the app | not its job | the two we checked bind it to the call id (1) | yes: the token's integrity hash |
+| The yes is bound to what the person was shown | no | no | not stated (1) | yes: `show`, `hear`; `confirm` refuses `unheard` and `stale_hearing` |
+| Who writes the words the person sees | the agent or the app | nobody; the call is policed, not shown | the application | Oathline renders them; a text supplied by the proposer is refused |
+| Spoken approvals (a voice read-back) | no | no | no | yes: `channel="spoken"`, the words rendered for speech |
+| Runs exactly once | up to the app | up to the app | not guaranteed (1) | yes: one token, one run, `EXECUTING` written before the run |
+| Only a human can confirm | up to the app | not its job | up to the app | yes: a model actor can never confirm, under any name on the list |
+| One tamper-evident record of request, showing, hearing, yes and run | no | logs vary | not stated (1) | yes: a hash-chained audit log, `verify()` |
+| Footprint | | | | 6 files, no dependencies, Python 3.10+ |
+
+(1) From the two SDKs' own documentation, read on 8 November 2026. OpenAI Agents SDK, [human in the loop](https://openai.github.io/openai-agents-python/human_in_the_loop/): "Per-call approvals are scoped to the specific call ID" and "Approval permits a tool call to execute; it does not guarantee exactly-once execution." Claude Agent SDK, [permissions](https://code.claude.com/docs/en/agent-sdk/permissions): the `canUseTool` callback receives the tool name and its input and answers allow or deny; binding the yes to that input, replay and an audit record are not stated. Both are good hooks to put Oathline behind; see the adapters plan.
+
+---
+
+## What it is
+
 **In three lines.** Oathline is a small governance core for AI agents that take real actions.
 The model interprets; deterministic code decides: only allowlisted capabilities run, model output is validated and not trusted, and a write waits for a human's confirmation token that works once.
 Requests, decisions and refusals are written to an append-only, hash-chained audit log. Standard library only, Python 3.10 or newer.
 
-**Install:** `python -m pip install oathline`
-
-**Ten lines that show it** (the test `tests/test_readme_top.py` runs this block exactly as printed):
+**Ten more lines: a read runs at once, a write waits for a human** (runs as printed):
 
 ```python
 from oathline import Capability, Engine, Registry
@@ -21,7 +75,7 @@ print("agent confirms:", engine.confirm("agent", proposal["token"])["ok"])      
 print("alice confirms:", engine.confirm("alice", proposal["token"])["state"], "| audit chain ok:", engine.audit.verify()["ok"])
 ```
 
-Expected output:
+It prints:
 
 ```
 read: {'events': ['09:00 stand-up']}
@@ -77,7 +131,7 @@ The whole `oathline/` package is 1961 lines of Python in 6 files. Count them you
 python -c "import glob; print(sum(1 for f in glob.glob('oathline/*.py') for _ in open(f, encoding='utf-8')))"
 ```
 
-The repository has 318 tests. `python -m unittest discover -s tests` runs them and prints the count.
+The repository has 319 tests. `python -m unittest discover -s tests` runs them and prints the count.
 
 An earlier version of Oathline Core recorded 233 events in its hash-chained audit log during one internal job for our own company (30 Sep to 2 Oct 2026).
 The job's audit logs are private, so this can't be checked from this repository.
@@ -242,6 +296,7 @@ The final `True` is the audit chain verifying.
 | `examples/llm_guard.py` | validating a (stubbed) model's tool call: invented arguments and self-approval are dropped |
 | `examples/agent_proposes.py` | an agent proposes, a named human confirms, the agent acts once |
 | `examples/nine_seconds.py` | a scripted agent with a found token tries to delete production and its backups; the deletes wait for a human |
+| `examples/stop_the_delete.py` | an agent asks to drop production; the human sees the exact action, a yes to a changed action is refused, the stored action runs once, the log is printed |
 
 ## Five-minute tour
 
@@ -253,7 +308,7 @@ python -m unittest discover -s tests
 ```
 
 The example shows a read running, a write waiting for a human, and the audit log proving it.
-The 318 tests need no network.
+The 319 tests need no network.
 
 The same flow in your own code. This block runs as written; the stand-ins at the top
 (`user_text`, `model_output`, `send_email`, `show_to_a_human`) are where your app plugs in:
