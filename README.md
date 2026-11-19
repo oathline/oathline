@@ -47,8 +47,8 @@ The longer version, `python examples/stop_the_delete.py`, adds the two cases tha
 | Spoken approvals (a voice read-back) | not covered | not covered | not covered | yes: `channel="spoken"`, the words rendered for speech |
 | Runs exactly once | up to the app | up to the app | not guaranteed (1) | yes: one token, one run, `EXECUTING` written before the run |
 | Only a human can confirm | up to the app | not its job | up to the app | yes: a model actor can never confirm, under any name on the list |
-| One tamper-evident record of request, showing, hearing, yes and run | no | logs vary | not stated (1) | yes: a hash-chained audit log, `verify()` |
-| Footprint | | | | 6 files, no dependencies, Python 3.10+ |
+| One tamper-evident record of request, showing, hearing, yes and run | no | logs vary | not stated (1) | yes: a hash-chained audit log, `verify()`; a rewrite by someone who can write the file is caught only against a head kept outside it (`anchor`) |
+| Footprint | | | | 7 files, no dependencies, Python 3.10+ |
 
 (1) From the two SDKs' own documentation, read on 8 November 2026. OpenAI Agents SDK, [human in the loop](https://openai.github.io/openai-agents-python/human_in_the_loop/): "Per-call approvals are scoped to the specific call ID" and "Approval permits a tool call to execute; it does not guarantee exactly-once execution." Claude Agent SDK, [permissions](https://code.claude.com/docs/en/agent-sdk/permissions): the `canUseTool` callback receives the tool name and its input and answers allow or deny; binding the yes to that input, replay and an audit record are not stated. Both are good hooks to put Oathline behind; see the adapters plan.
 
@@ -125,13 +125,13 @@ What it does not protect against is listed in full [further down](#what-oathline
 
 Standard library only. Python 3.10+.
 
-The whole `oathline/` package is 1961 lines of Python in 6 files. Count them yourself from the repository root:
+The whole `oathline/` package is 2264 lines of Python in 7 files. Count them yourself from the repository root:
 
 ```bash
 python -c "import glob; print(sum(1 for f in glob.glob('oathline/*.py') for _ in open(f, encoding='utf-8')))"
 ```
 
-The repository has 319 tests. `python -m unittest discover -s tests` runs them and prints the count.
+The repository has 398 tests. `python -m unittest discover -s tests` runs them and prints the count.
 
 An earlier version of Oathline Core recorded 233 events in its hash-chained audit log during one internal job for our own company (30 Sep to 2 Oct 2026).
 The job's audit logs are private, so this can't be checked from this repository.
@@ -292,7 +292,7 @@ The final `True` is the audit chain verifying.
 
 | File | Shows |
 |---|---|
-| `examples/quickstart.py` | a read runs, a write waits for a human, the audit log proves it |
+| `examples/quickstart.py` | a read runs, a write waits for a human, the audit log records it and `verify()` checks the links |
 | `examples/llm_guard.py` | validating a (stubbed) model's tool call: invented arguments and self-approval are dropped |
 | `examples/agent_proposes.py` | an agent proposes, a named human confirms, the agent acts once |
 | `examples/nine_seconds.py` | a scripted agent with a found token tries to delete production and its backups; the deletes wait for a human |
@@ -307,8 +307,8 @@ python examples/quickstart.py
 python -m unittest discover -s tests
 ```
 
-The example shows a read running, a write waiting for a human, and the audit log proving it.
-The 319 tests need no network.
+The example shows a read running, a write waiting for a human, and the audit log recording it (`verify()` checks the links).
+The 398 tests need no network.
 
 The same flow in your own code. This block runs as written; the stand-ins at the top
 (`user_text`, `model_output`, `send_email`, `show_to_a_human`) are where your app plugs in:
@@ -492,6 +492,57 @@ print(engine.confirm("alice", p["token"])["state"])                             
 A capability that does not declare `heard` behaves exactly as in 0.1.2. What the rule does not promise is in
 the limits below: heard is not understood.
 
+## Carried items, must_show and reading from a sequence number (0.3.0)
+
+**Carried items.** A message shown on a card is not its bytes: it sits inside the card's own lines. A value too long to
+show whole is shown as its hash. Declare which keys may be carried which way, and Oathline renders the form itself
+(a fragment: `engine`, `args` and the imports are those of the tour above):
+
+```python
+sms = Capability("sms.send", frozenset({"agent", "alice"}), writes=True, needs_confirmation=True, heard=True,
+                 products=frozenset({"card"}), gutter_keys=frozenset({"body"}), hash_keys=frozenset({"attachment"}),
+                 must_show=frozenset({"to", "body"}))
+engine.propose("agent", "sms.send", args, items=[{"key": "to", "value": args["to"]},
+                                                 {"key": "body", "value": args["body"], "carried": "gutter"},
+                                                 {"key": "attachment", "value": args["attachment"], "carried": "hash"}])
+```
+
+The body's words become the body with every line marked `| `; the attachment's become the SHA-256 of its canonical JSON.
+A carried item must be one of the call's arguments with an equal value. `show()` renders every carried form again from
+the stored arguments and refuses a showing whose form differs (`carried_hash_mismatch`, `carried_mismatch`).
+
+**Blocks: a value too long to be an argument.** Core's arguments hold at most 8 KB, so a long value (a file to write, a long SQL
+script, an email) is carried by its hash: the ARGUMENT is `{"sha256": <hex>, "chars": <length>}` and the item is
+`{"key": k, "value": <the same dict>, "carried": "block"}` (its key in `block_keys`). The product shows the value whole, as a block:
+
+```
+<label>:
+| first line of the value
+| second line
+--- end of <key> ---
+```
+
+`show()` finds that block in the shown text, takes the marks off, and refuses unless its SHA-256 and its length are the
+argument's (`carried_hash_mismatch`); a missing block, or a line in it without its mark, is `item_not_in_text`.
+The block must reach `show()` exactly as rendered: render it by splitting the value on "\n" only (`value.split("\n")`, not
+`splitlines()`), one "| " line per piece, so a value ending in a line break has a last "| " line of its own, an empty value is
+the label line then the end mark, and a "\r" in the value stays at the end of its line. Core hashes the unmarked lines joined by
+"\n", so a value holding "\r\n" shows and runs; a block whose lines a channel re-wrapped, indented or turned into "\r\n" is
+refused. One block per label: if the label line or the end mark occurs more than once in the shown text, it is `item_not_in_text`.
+The executor gets
+the hash dict; the product runs the stored value after checking it hashes to it (the Guard does this).
+
+**must_show.** The arguments a heard capability names in `must_show` must be shown as items whenever the call holds them;
+a proposal that leaves one out is refused before it is stored and again before it runs (`unshown_argument`).
+
+**Reading from where you stopped.** `audit.events(since_seq=N)` returns the events after N; `audit.verify(from_seq=N,
+from_hash=H)` checks event N and every link after it. The same from a shell, read-only:
+
+```
+python -m oathline events audit.db --since 41
+python -m oathline verify audit.db --since 41 --from-hash <the hash you kept for event 41>
+```
+
 ## Reference
 
 **The hearing rule's names.** `Capability(..., heard=True, products=frozenset({...}))` is allowed on a gated
@@ -601,6 +652,10 @@ check it before using `v.candidates[0]`.
 | `said_not_rendered` | The capability's renderer raised, or did not return non-empty text, for an item's value (or the rendered items do not fit the store). No words, no proposal |
 | `whole_word_not_allowed` | A list item's `whole_word` is not one of the words Core lets stand for a whole list (`everyone`, `everybody`, `all of them`, `all of you`, `the whole crew`, `the whole team`, `the lot`, `all present`). The proposer does not choose it |
 | `showing_not_declared` | An item asks to be shown as `screen`, `kept` or `preset`, and its key is not in the capability's `screen_keys`, `kept_keys` or `preset_keys`. `key` names it. How an item is shown is the capability's declaration, never the proposer's choice |
+| `carried_not_argument` | (0.3.0) An item marked `carried` is not one of the call's arguments with an equal value. A carried item is a rendering of an argument (a marked block, a hash), so it must BE that argument. `key` names it |
+| `unshown_argument` | (0.3.0) The capability's `must_show` names an argument the call holds, and no item shows it with that key and an equal value. Refused at `request()` / `propose()` before anything is stored, and again at `confirm()` before anything runs. `key` names it |
+| `carried_hash_mismatch` | (0.3.0) `show()` recomputed the SHA-256 of a hash-carried item from the stored argument and it is not the hash the item carries: what would be shown is not a hash of what would run. Nothing is recorded as shown |
+| `carried_mismatch` | (0.3.0) `show()` rendered a gutter-carried item again from the stored argument and it is not the marked block the item carries. Nothing is recorded as shown |
 | `execution_failed` | The executor raised an error. The error text is in the `EXECUTE_FAILED` event in the audit log |
 | `execution_returned_failure` | The executor returned `"ok": False`. `state` is `failed`; `result` holds what it returned |
 | `audit_write_failed` | A record the call needs before it may go on (`REQUEST`, `AUTHORIZED`, `PROPOSED`, `CONFIRMED`, `EXECUTING`) could not be written, so nothing ran and nothing was kept: a proposal with no record is withdrawn, and a confirmed token is given back so the same confirmation can be made again once the log is free. `state` is `not_run`. If the token could not be given back either, `warning` is `token_spent` |
@@ -676,11 +731,18 @@ see [SECURITY.md](https://github.com/oathline/oathline/blob/main/SECURITY.md).
 
 **The two SQLite files**
 
+- A hash chain on its own detects edits; it does not stop a privileged rewrite. Catching one needs `audit.head()` anchored
+  outside the log (see **Anchor it** below).
 - Someone who can write to the audit file, or use its connection, can rewrite events from any point to the
   end and recompute their hashes, add new events with correct hashes, cut events off the end, or empty the
   log. `verify()` on its own then passes. It catches the rest: a changed field, a deleted event that is not
   at the end, two swapped events, an event with a wrong hash.
   Keep `audit.head()` outside the machine and pass it to `verify(expected_head=...)`.
+
+  **Anchor it.** Once a day (or after anything that matters), run `python -m oathline anchor --store audit.db` and keep its
+  `head` and `seq` somewhere the log's writer cannot reach (a message to your phone, another account, paper).
+  Later, `python -m oathline verify --store audit.db --expected-head <head> --anchor-seq <seq>` exits 1 if the log
+  was cut short before that event or rewritten up to it, even with every hash recomputed. An anchor proves the past up to its `seq`, nothing after it.
 - Opening an existing log or token store writes nothing and takes no write lock, so one process can read
   and verify a log while another is writing to it. The table and its triggers are created in one
   transaction, when the table is missing. One exception: a log whose table has no rows and no triggers (a
@@ -815,11 +877,15 @@ see [SECURITY.md](https://github.com/oathline/oathline/blob/main/SECURITY.md).
 
 ## Next
 
-None of this exists in the repository today.
-
-- **Planned, not built:** a gateway that puts Oathline in front of MCP servers. Reads pass, writes wait for a human, and a tool whose description changes is refused.
+- **Built, in its own repository:** [oathline-guard](https://github.com/oathline/oathline-guard) (`pip install oathline-guard`), a
+  gateway that puts Oathline in front of an MCP server: reads pass, writes wait for a person's yes in a second terminal. **Planned,
+  not built** in it: refusing a tool whose description changes.
 - **Planned, not built:** a hook for coding agents that routes destructive commands through approval.
 - **Planned, not built:** signed receipts for approved actions.
+
+## Who built it
+
+Built by Saroj Sanjel with AI coding agents: every change test-first, independently reviewed, approved by a human before release.
 
 ## Licence
 

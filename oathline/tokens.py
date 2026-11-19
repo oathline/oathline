@@ -64,7 +64,8 @@ from .capabilities import name_problem
 TTL_MIN, TTL_MAX = 30, 30 * 86400   # a lifetime from 30 s to 30 days: a card shown to a human may wait days for the yes (0.2.0)
 STATES = ("proposed", "used", "running", "expired")   # used: confirmed, nothing run yet; running: the action started
 ITEM_SHOWINGS = ("spoken", "screen", "kept", "preset")   # how an item reaches the human (0.2.0); spoken is the default
-ITEM_TEXT_FIELDS = ("said", "label", "kind", "shown_as", "whole_word")
+ITEM_TEXT_FIELDS = ("said", "label", "kind", "shown_as", "whole_word", "carried")
+CARRIED_KINDS = ("gutter", "hash", "block")   # 0.3.0: an item shown in a form Core renders or checks from the argument
 _HASH_SHAPE = re.compile(r"[0-9a-f]{64}")
 ARGUMENTS_MAX_DEPTH = 32       # objects and lists inside one another; deeper arguments are refused
 BUSY_TIMEOUT_SECONDS = 30      # how long one write waits for another writer's transaction before it fails
@@ -110,6 +111,12 @@ def arguments_text(arguments: object) -> str:
     return again
 
 
+def value_text(value: object) -> str:
+    """One value's canonical JSON text, by the arguments' own rules (0.3.0): what a carried hash is computed over and what
+    an item is compared with its argument by. ConfigError when it cannot be stored (NaN, bytes, sets, too deep)."""
+    return arguments_text({"value": value})[9:-1]
+
+
 def items_text(items: object) -> str:
     """The canonical JSON text of an items list, or ConfigError when it cannot be stored (0.2.0). Each item is a dict
     with a plain-name `key` and a JSON-storable `value`; `said`, `label`, `kind`, `shown_as` and `whole_word` are text
@@ -126,6 +133,8 @@ def items_text(items: object) -> str:
                 raise ConfigError(f"an item's {f} must be text")
         if it.get("shown_as", "spoken") not in ITEM_SHOWINGS:
             raise ConfigError("an item's shown_as must be one of " + ", ".join(ITEM_SHOWINGS))
+        if "carried" in it and it["carried"] not in CARRIED_KINDS:
+            raise ConfigError("an item's carried must be one of " + ", ".join(CARRIED_KINDS))
         if set(it) - {"key", "value", *ITEM_TEXT_FIELDS}:
             raise ConfigError("an item holds a field that is not key, value, " + ", ".join(ITEM_TEXT_FIELDS))
     return arguments_text({"items": items})[9:-1]        # the list's own canonical text, checked by the arguments' rules
@@ -137,7 +146,8 @@ def _items_hash(items_s: str) -> str:
     and HOW: every field the showing check reads (a value for the screen, a list of names, the form's own preset,
     the label a screen item is named by, the whole word a list is covered by) is part of the proposal."""
     pairs = [[it["key"], it["value"], it.get("said", ""), it.get("kind", ""), it.get("shown_as", "spoken"),
-              it.get("label", ""), it.get("whole_word", "")] for it in json.loads(items_s)]
+              it.get("label", ""), it.get("whole_word", "")] + ([it["carried"]] if it.get("carried") else [])
+             for it in json.loads(items_s)]                  # 0.3.0: `carried` only when present, so a 0.2.0 item hashes as before
     return hashlib.sha256(json.dumps(pairs, sort_keys=True, separators=(",", ":"), ensure_ascii=False).encode("utf-8")).hexdigest()
 
 

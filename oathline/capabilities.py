@@ -124,11 +124,21 @@ class Capability:
     screen_keys: frozenset[str] = frozenset()
     kept_keys: frozenset[str] = frozenset()
     preset_keys: frozenset[str] = frozenset()
+    # 0.3.0: keys whose item is CARRIED in a form Core renders from the argument: `gutter_keys` as a marked block (every line
+    # "| "), `hash_keys` as the SHA-256 of its canonical JSON. The proposer marks the item `carried`; only declared keys may be.
+    gutter_keys: frozenset[str] = frozenset()
+    hash_keys: frozenset[str] = frozenset()
+    # 0.3.0: keys whose ARGUMENT is {"sha256", "chars"} of a value too long for the arguments, shown whole as a block under its
+    # label ("<label>:", every line "| ", "--- end of <key> ---"); show() unmarks the block and checks its hash and length.
+    block_keys: frozenset[str] = frozenset()
+    # 0.3.0: the arguments that MUST be shown as items (same key, equal value) whenever the call holds them; a proposal that
+    # leaves one out is refused (`unshown_argument`), and confirm() checks it again before anything runs. Heard capabilities only.
+    must_show: frozenset[str] = frozenset()
 
     def __post_init__(self):
         # the name sets are copied into frozensets, so the caller's own set cannot widen a grant later
         for field in ("principals", "approvers", "secret_arguments", "arguments", "products", "screen_keys", "kept_keys",
-                      "preset_keys"):
+                      "preset_keys", "gutter_keys", "hash_keys", "block_keys", "must_show"):
             object.__setattr__(self, field, _name_set(repr(self.name), field, getattr(self, field)))
 
     @property
@@ -158,7 +168,7 @@ class Registry:
             for who in (*c.principals, *c.approvers, *c.products):
                 if name_problem(who):
                     raise ValueError(f"{c.name}: unusable principal name {who!r} ({name_problem(who)})")
-            for key in (*c.screen_keys, *c.kept_keys, *c.preset_keys):
+            for key in (*c.screen_keys, *c.kept_keys, *c.preset_keys, *c.gutter_keys, *c.hash_keys, *c.block_keys, *c.must_show):
                 if name_problem(key):
                     raise ValueError(f"{c.name}: unusable item key {key!r} ({name_problem(key)})")
             for who in c.products:
@@ -174,6 +184,8 @@ class Registry:
                 raise ValueError(f"{c.name}: heard=True needs a gated capability (writes or needs_confirmation)")
             if c.heard and not c.products:
                 raise ValueError(f"{c.name}: heard=True needs at least one product actor to show and hear it (products=)")
+            if (c.gutter_keys or c.hash_keys or c.block_keys or c.must_show) and not c.heard:
+                raise ValueError(f"{c.name}: gutter_keys, hash_keys, block_keys and must_show are for heard capabilities (heard=True)")
             caps[c.name] = c
         self._caps: Mapping[str, Capability] = MappingProxyType(caps)
 

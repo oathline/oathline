@@ -1,4 +1,4 @@
-"""Five-minute tour: a read runs, a write waits for a human, and the audit log proves it.
+"""Five-minute tour: a read runs, a write waits for a human, and the audit log records it (`verify()` checks the links).
 
     python examples/quickstart.py
 """

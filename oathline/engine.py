@@ -71,7 +71,54 @@ from typing import Callable, Iterable
 
 from .audit import AuditLog, canonical, sha
 from .capabilities import Denied, Registry, name_problem, not_allowed_in_a_name
-from .tokens import ConfigError, TokenStore, arguments_text, items_text
+from .tokens import ConfigError, TokenStore, arguments_text, items_text, value_text
+
+GUTTER = "| "                       # 0.3.0: the mark on every line of a gutter-carried item
+NL = chr(10)
+
+
+def carried_form(kind: str, value: object) -> str:
+    """The words of a CARRIED item (0.3.0), computed by Core from the argument, never by the proposer. `gutter`: the text as a
+    block with every line marked (every kind of line break, as a phone breaks them), so no line of it can read as a line of
+    the card. A trailing line break makes no line of its own ("a\\n" and "a" share one form); the argument itself is still
+    compared by `value_text` at confirm, so the two never pass for each other. `hash`: the SHA-256 of the value's canonical
+    JSON (`value_text`, the arguments' own form)."""
+    if kind == "gutter":
+        if type(value) is not str:
+            raise ValueError("a gutter item carries text")   # an object has no lines to mark: refused as said_not_rendered
+        return NL.join(GUTTER + ln for ln in (value.splitlines() or [""]))
+    if kind == "hash":
+        return sha(value_text(value).encode("utf-8"))   # the arguments' own canonical JSON (FABLE 00:45: one canonicaliser)
+    if kind == "block":                                 # the argument IS the hash of a value too long to be an argument
+        if type(value) is not dict or set(value) != {"sha256", "chars"} or type(value["chars"]) is not int \
+                or value["chars"] < 0 or type(value["sha256"]) is not str or not _HEX64.fullmatch(value["sha256"]):
+            raise ValueError("a block item carries {sha256, chars}")
+        return f"{value['chars']} characters, sha256 {value['sha256']}"
+    raise ValueError(f"unknown carried kind {kind!r}")
+
+
+_HEX64 = re.compile(r"[0-9a-f]{64}")
+END_MARK = "--- end of {key} ---"
+
+
+def shown_block(text: str, key: str, label: str) -> str | None:
+    """The value a block shows (0.3.0 `carried: "block"`): the lines between "<label>:" and "--- end of <key> ---", each with its
+    "| " mark taken off, joined by line breaks. None when there is no such block, a line in it is not marked, or the label line or
+    the end mark occurs more than once (one block per label: a text showing two values under one label is not a showing of either).
+    Bytes-faithful: the text is split on "\n" only and nothing inside the block changes, so a "\r" in the value stays in it."""
+    lines = str(text or "").split(NL)
+    head, tail = f"{label}:", END_MARK.format(key=key)
+    if lines.count(head) != 1 or lines.count(tail) != 1:
+        return None
+    start, end = lines.index(head), lines.index(tail)
+    if end < start:
+        return None
+    body = lines[start + 1:end]
+    if any(not ln.startswith(GUTTER) for ln in body):
+        return None
+    return NL.join(ln[len(GUTTER):] for ln in body)
+
+
 from .validator import appears_verbatim
 
 Executor = Callable[[dict], dict]
@@ -216,7 +263,15 @@ def item_problem(item: dict, text: str, channel: str) -> str | None:
     """Why an item is NOT in the shown text, or None when it is (the hearing rule, 0.2.0). A spoken or preset item:
     its `said` form, else its value, as whole words (`appears_verbatim`). A list item: every element as whole words,
     or its declared `whole_word` ("everyone"). A screen item: its label, on a screen or card channel only. A kept item:
-    its label."""
+    its label. A block item (0.3.0): its block under "<label or key>:", whose unmarked text has the argument's SHA-256 and length."""
+    if item.get("carried") == "block":
+        v = item.get("value") if isinstance(item.get("value"), dict) else {}
+        shown = shown_block(text, str(item["key"]), str(item.get("label") or item["key"]))
+        if shown is None:
+            return "item_not_in_text"
+        if sha(shown.encode("utf-8")) != v.get("sha256") or len(shown) != v.get("chars"):
+            return "carried_hash_mismatch"
+        return None
     how = item.get("shown_as", "spoken")
     label = str(item.get("label") or "")
     if how == "screen":
@@ -308,6 +363,30 @@ class Engine:
         except Exception:  # noqa: BLE001
             return None
         return said if type(said) is str and said.strip() else None
+
+    def _said(self, capability: str, item: dict, value: object) -> str | None:
+        """An item's words: the carried form when the item is carried (0.3.0), else the renderer's."""
+        if item.get("carried"):
+            try:
+                return carried_form(item["carried"], value)
+            except Exception:  # noqa: BLE001 - fail closed: no words, no proposal
+                return None
+        return self._render(capability, item["key"], value)
+
+    def _shown_problem(self, capability: str, arguments: dict, items: list | None):
+        """(reason, key) when the items do not show what must be shown (0.3.0), else None. A carried item must BE an argument
+        (same key, equal value); every `must_show` argument the call holds must be an item with that key and an equal value."""
+        if not items:
+            return None
+        args = arguments if isinstance(arguments, dict) else {}
+        for it in items:
+            if it.get("carried") and (it["key"] not in args or value_text(args[it["key"]]) != value_text(it["value"])):
+                return "carried_not_argument", it["key"]
+        cap = self.registry.get(capability)
+        for name in sorted(cap.must_show if cap is not None else ()):
+            if name in args and not any(it["key"] == name and value_text(it["value"]) == value_text(args[name]) for it in items):
+                return "unshown_argument", name
+        return None
 
     def _is_agent(self, name: object) -> bool:
         """Not a human, as far as this engine can tell: on the non-human list, or (when `humans` is set)
@@ -407,8 +486,12 @@ class Engine:
             if declared is not None and (cap is None or it["key"] not in getattr(cap, declared)):
                 out = self._refuse(principal, capability, "showing_not_declared")
                 return None, {**out, "key": it["key"]}
+            carried = it.get("carried")                 # 0.3.0: only a key the capability declares may be carried, and only that way
+            if carried and (cap is None or it["key"] not in getattr(cap, carried + "_keys")):
+                out = self._refuse(principal, capability, "showing_not_declared")
+                return None, {**out, "key": it["key"]}
         for it in items:
-            said = self._render(capability, it["key"], it["value"])
+            said = self._said(capability, it, it["value"])
             if said is None:
                 return None, self._refuse(principal, capability, "said_not_rendered")
             it["said"] = said
@@ -462,6 +545,9 @@ class Engine:
         if cap is not None and cap.gated:
             if cap.heard and items is None:
                 return self._refuse(principal, capability, "items_required")   # the hearing rule: nothing shown, nothing written
+            bad = self._shown_problem(capability, arguments, items)
+            if bad:
+                return {**self._refuse(principal, capability, bad[0]), "key": bad[1]}
             agent = self._is_agent(principal)
             out = self._propose(principal, capability, arguments, "PROPOSED_BY_AGENT" if agent else "PROPOSED", {}, items)
             if out["ok"]:
@@ -496,6 +582,9 @@ class Engine:
             return out
         if cap.heard and items is None:
             return self._refuse(agent, capability, "items_required")       # the hearing rule: nothing shown, nothing written
+        bad = self._shown_problem(capability, arguments, items)
+        if bad:
+            return {**self._refuse(agent, capability, bad[0]), "key": bad[1]}
         out = self._propose(agent, capability, arguments, "PROPOSED_BY_AGENT",
                             {"writes": grant.writes, "approvers": sorted(cap.approvers) or "any granted human"}, items)
         if out["ok"]:
@@ -548,6 +637,21 @@ class Engine:
             return self._refuse_confirm(principal, token, "text_too_large", "show", event="SHOW_REFUSED")
         if channel not in SHOW_CHANNELS:
             return self._refuse_confirm(principal, token, "bad_channel", "show", event="SHOW_REFUSED")
+        stored = rec["arguments"] if isinstance(rec["arguments"], dict) else {}
+        for item in rec["items"]:                      # 0.3.0: the carried form is recomputed by the thing that records
+            kind = item.get("carried")
+            if not kind:
+                continue
+            try:
+                same = item["key"] in stored and carried_form(kind, stored[item["key"]]) == item.get("said")
+            except Exception:  # noqa: BLE001
+                same = False
+            if not same and kind in ("hash", "block"):
+                return self._refuse_confirm(principal, token, "carried_hash_mismatch", action="show", event="SHOW_REFUSED",
+                                            key=item["key"])
+            if not same:
+                return self._refuse_confirm(principal, token, "carried_mismatch", action="show", event="SHOW_REFUSED",
+                                            key=item["key"])
         for item in rec["items"]:
             why = item_problem(item, text, channel)
             if why:
@@ -613,7 +717,7 @@ class Engine:
             return self._refuse_confirm(principal, token, "unknown_item", action="correct", event="CORRECT_REFUSED", **named)
         for it in hits:
             it["value"] = value
-            said = self._render(rec["capability"], key, value)   # the words are Core's, rendered again for the new value
+            said = self._said(rec["capability"], it, value)   # the words are Core's, rendered again for the new value
             if said is None:
                 return self._refuse_confirm(principal, token, "said_not_rendered", action="correct", event="CORRECT_REFUSED", **named)
             it["said"] = said
@@ -795,6 +899,9 @@ class Engine:
         if cap is not None and cap.heard:                 # the hearing rule (0.2.0): shown, heard, yes to exactly that
             if rec["items"] is None:
                 return self._refuse_confirm(principal, token, "items_required")
+            bad = self._shown_problem(rec["capability"], rec["arguments"], rec["items"])   # 0.3.0: all of what runs was shown
+            if bad:
+                return self._refuse_confirm(principal, token, bad[0], key=bad[1])
             heard = self._last("HEARD", token, cap.products)   # a hearing is the product's; one written by anyone else is none
             if heard is None:
                 return self._refuse_confirm(principal, token, "unheard")

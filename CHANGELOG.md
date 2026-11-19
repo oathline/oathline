@@ -1,5 +1,71 @@
 # Changelog
 
+## 0.3.0
+
+What the 0.2.0 adopters (a voice and card product's email and SMS proposals, the MCP guard, the adapters kit) had to build
+for themselves, moved into Core. Everything of 0.2.0 is unchanged; a 0.2.0 audit log and token store open and verify under
+0.3.0, and a proposal stored by 0.2.0 completes under it (tests/test_compat_020.py, stores written by the v0.2.0 code).
+
+### Reading the log from where you stopped
+
+- Every event already carried a dense `seq` inside its hashed body (0.1.x and 0.2.0 too); what a reader lacked was a way
+  to start after the last event it read. `AuditLog.events(event_type=None, *, since_seq=N)` returns the events with
+  `seq > N`. `AuditLog.verify(expected_head=None, *, from_seq=N, from_hash=H)` checks event N itself (its payload and
+  event hash) and every link after it, trusting only event N's link to the one before; with `from_hash`, event N must
+  carry exactly the hash the reader kept. `events` in the report counts the events after N. The report now says what it
+  proves, and no more: without an expected head, that the links hold (a rewrite by someone who can write the file is not
+  ruled out: check against an anchored head); with one, that the log is the one whose head was kept; never that anyone
+  understood it.
+- `AuditLog(path, read_only=True)` opens an existing log for reading only (never creates it).
+- A read-only command line: `python -m oathline events <audit.db> [--since N] [--type T]` (one JSON line per event) and
+  `python -m oathline verify <audit.db> [--since N] [--from-hash H] [--head H]` (the report as JSON; exit 0 when it
+  holds, 1 when not, 2 when the file cannot be opened). Core had no command line before.
+- **Anchor it** (Claude 22:18 Fri 13 Nov, after a review of the hash-chain claim): `python -m oathline anchor --store <audit.db>`
+  prints the `head`, `seq` and `events` to keep outside the machine; `AuditLog.verify_anchor(head, seq)` and
+  `python -m oathline verify --store <audit.db> --expected-head H --anchor-seq N` fail (exit 1) when the log was cut short
+  before event N ("shorter than the anchor") or rewritten up to it with every hash recomputed, both of which `verify()` alone
+  passes; a log that only grew since the anchor passes. `--expected-head` is `--head`; `--store` may replace the path.
+  A head that is not 64 lower-case hex characters, or a seq below 0, is refused as an argument (exit 2, one JSON line)
+  before the log is read: a typing slip is never reported as a rewritten log; a head that does not match says both
+  readings (the log was rewritten up to it, or it is not the head kept for that seq).
+  The same for `--from-hash` / `verify(from_hash=)`; a store path written with `~` is expanded by the command line itself
+  (cmd and PowerShell do not); "shorter than the anchor" and a plain head mismatch each also name the other reading (a
+  seq typed too high; a log that only grew since the head was kept).
+
+### Items carried in a form that is not their bytes
+
+- An item may be `carried`: `"gutter"` (the text as a block with every line marked `| `, every kind of line break, so
+  no line of a message can read as a line of the card around it) or `"hash"` (the SHA-256 of the value's canonical JSON,
+  for a value too long to show whole). The capability declares which keys may be carried which way
+  (`Capability.gutter_keys`, `Capability.hash_keys`); the proposer marks the item and chooses nothing else. Core renders
+  the carried form (`engine.carried_form`), never the proposer and never the product's renderer; a carried item must BE
+  one of the call's arguments, same key and an equal value (`carried_not_argument`).
+- `show()` renders every carried form again from the STORED argument and refuses the showing when it differs
+  (`carried_hash_mismatch`, `carried_mismatch`): the hash a person saw is computed by the thing that records it, not by
+  the thing that asks. `correct()` renders a carried item again for its new value, and the argument changes with it.
+- The items hash covers `carried` only when an item has it, so every 0.2.0 item hashes exactly as before.
+- **`carried: "block"`** (Claude 17:40 Wed 11 Nov: folded into 0.3.0, which is unreleased): for a value too long for the 8 KB
+  arguments. The ARGUMENT is `{"sha256", "chars"}` (`Capability.block_keys` declares which keys may be); the product shows the value
+  whole as a block under "<label or key>:", every line "| ", closed by "--- end of <key> ---"; `show()` unmarks it and refuses unless
+  its SHA-256 and length are the argument's (`carried_hash_mismatch`; no block or an unmarked line: `item_not_in_text`). Core's words
+  for the item: "<chars> characters, sha256 <hex>". This is the Guard's long-value binding and SIYA's card hash, moved into Core.
+  A block is bytes-faithful: the shown text is split on "\n" only and nothing inside the block changes, so a value holding "\r\n"
+  (a file written on Windows) shows and runs; a text whose line breaks a channel turned into "\r\n" is refused. One block per label:
+  a shown text in which the label line or the end mark occurs twice is `item_not_in_text` (FABLE 19:00 / 19:06 Thu 12 Nov).
+
+### What runs must have been shown
+
+- `Capability.must_show` (heard capabilities only) names the arguments that must be shown as items, same key and an equal
+  value, whenever the call holds them. A proposal that leaves one out is refused at `request()` / `propose()` before
+  anything is stored (`unshown_argument`, with `key`), and `confirm()` checks it again before anything runs. An argument
+  outside `must_show` may go unshown, as in 0.2.0. `gutter_keys`, `hash_keys` and `must_show` on a capability that is
+  not heard are a configuration error at the Registry.
+
+### Unchanged
+
+- The audit schema (version 1), the token integrity hash, every 0.2.0 refusal and event. Standard library only;
+  Python 3.10 or newer. 7 files (the new one is the command line).
+
 ## 0.2.0
 
 The hearing rule: nothing is written unheard. Opt-in by capability; everything of 0.1.2 is unchanged.
